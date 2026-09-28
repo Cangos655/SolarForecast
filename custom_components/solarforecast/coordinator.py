@@ -45,6 +45,14 @@ STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_history"
 # Bump this when the date attribution logic changes to force a clean retrain
 CURRENT_DATA_VERSION = 5
 
+# A stored training entry is retrained once the recorder shows at least this
+# many times more yield for the same day. Daily-resetting yield sensors (e.g.
+# cloud-polled inverters) can briefly go unavailable right around their peak
+# reading, undercounting that day when it's first trained; this threshold is
+# low enough to catch that (typically ~2x) without reacting to normal
+# day-to-day weather variance.
+STALE_ENTRY_FACTOR = 1.5
+
 
 class SolarForecastCoordinator(DataUpdateCoordinator):
     """Manages data fetching, auto-training, and forecast calculation."""
@@ -230,8 +238,10 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         if not daily_yields:
             return False
 
-        # Detect stale entries: recorder now shows a value ≥ 3× what was trained.
-        # This happens when a day was trained while still incomplete (e.g. early morning).
+        # Detect stale entries: recorder now shows a value clearly higher than what
+        # was trained (e.g. the day was trained while still incomplete, or the
+        # inverter had a brief unavailable gap that made the recorder undercount
+        # that day when it was first read).
         stale_dates: set[str] = set()
         for entry in self._history:
             date = entry.get("date", "")
@@ -239,7 +249,7 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
                 continue
             stored = entry.get("yield_kwh", 0)
             recorded = daily_yields[date]
-            if stored > 0 and recorded >= stored * 3:
+            if stored > 0 and recorded >= stored * STALE_ENTRY_FACTOR:
                 stale_dates.add(date)
                 _LOGGER.info(
                     "Stale entry %s: stored %.2f kWh but recorder shows %.2f kWh – will retrain",

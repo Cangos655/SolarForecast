@@ -34,11 +34,51 @@ from .weather_api import search_location
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _get_energy_sensors(hass: HomeAssistant) -> dict[str, str]:
-    """Return {entity_id: friendly_name} for all energy sensors in HA."""
-    entity_reg = er.async_get(hass)
-    sensors: dict[str, str] = {}
+async def _get_energy_dashboard_solar_sensors(hass: HomeAssistant) -> list[str]:
+    """Return entity_ids configured as solar production sources in the HA Energy Dashboard."""
+    try:
+        from homeassistant.components.energy.data import async_get_manager
+    except ImportError:
+        return []
 
+    manager = await async_get_manager(hass)
+    if not manager.data:
+        return []
+
+    return [
+        source["stat_energy_from"]
+        for source in manager.data.get("energy_sources", [])
+        if source.get("type") == "solar" and source.get("stat_energy_from")
+    ]
+
+
+async def _get_energy_sensors(hass: HomeAssistant) -> dict[str, str]:
+    """Return {entity_id: friendly_name} of candidate solar production sensors.
+
+    Prefers the sensor(s) already configured as solar sources in the HA
+    Energy Dashboard - that's normally set up already and unambiguous, so
+    the user doesn't have to pick their solar sensor out of every energy
+    sensor in the house a second time. Falls back to scanning all energy
+    sensors if the Energy Dashboard has no solar source configured yet.
+    """
+    entity_reg = er.async_get(hass)
+
+    def _label(entity_id: str, state) -> str:
+        entry = entity_reg.async_get(entity_id)
+        friendly_name = state.attributes.get("friendly_name", entity_id)
+        if entry and entry.name:
+            friendly_name = entry.name
+        return f"{friendly_name} ({entity_id})"
+
+    sensors: dict[str, str] = {}
+    for entity_id in await _get_energy_dashboard_solar_sensors(hass):
+        state = hass.states.get(entity_id)
+        if state is not None:
+            sensors[entity_id] = _label(entity_id, state)
+    if sensors:
+        return sensors
+
+    # Fallback: no solar source configured in the Energy Dashboard yet.
     for state in hass.states.async_all("sensor"):
         entity_id = state.entity_id
         device_class = state.attributes.get("device_class")
@@ -48,11 +88,7 @@ async def _get_energy_sensors(hass: HomeAssistant) -> dict[str, str]:
         if device_class == SensorDeviceClass.ENERGY or (
             state_class in ("total", "total_increasing") and "kWh" in unit
         ):
-            entry = entity_reg.async_get(entity_id)
-            friendly_name = state.attributes.get("friendly_name", entity_id)
-            if entry and entry.name:
-                friendly_name = entry.name
-            sensors[entity_id] = f"{friendly_name} ({entity_id})"
+            sensors[entity_id] = _label(entity_id, state)
 
     return sensors
 
@@ -107,6 +143,12 @@ class SolarForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 except aiohttp.ClientError:
                     errors["base"] = "cannot_connect"
 
+        default_sensor = next(iter(energy_sensors), None)
+        sensor_marker = (
+            vol.Required(CONF_SOLAR_SENSOR, default=default_sensor)
+            if default_sensor
+            else vol.Required(CONF_SOLAR_SENSOR)
+        )
         schema = vol.Schema(
             {
                 vol.Required(
@@ -118,7 +160,7 @@ class SolarForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     }
                 ),
                 vol.Optional(CONF_CITY, default=""): str,
-                vol.Required(CONF_SOLAR_SENSOR): vol.In(energy_sensors),
+                sensor_marker: vol.In(energy_sensors),
             }
         )
 
@@ -184,15 +226,19 @@ class SolarForecastOptionsFlow(config_entries.OptionsFlow):
 
         # Options override data – same merge as coordinator
         current = {**self._config_entry.data, **self._config_entry.options}
-
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_SOLAR_SENSOR,
-                    default=current.get(CONF_SOLAR_SENSOR, ""),
-                ): vol.In(energy_sensors),
-            }
+        current_sensor = current.get(CONF_SOLAR_SENSOR)
+        default_sensor = (
+            current_sensor
+            if current_sensor in energy_sensors
+            else next(iter(energy_sensors), current_sensor)
         )
+        sensor_marker = (
+            vol.Required(CONF_SOLAR_SENSOR, default=default_sensor)
+            if default_sensor
+            else vol.Required(CONF_SOLAR_SENSOR)
+        )
+
+        schema = vol.Schema({sensor_marker: vol.In(energy_sensors)})
         return self.async_show_form(
             step_id="init",
             data_schema=schema,

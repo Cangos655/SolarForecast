@@ -10,7 +10,7 @@
           "solar_sensor": "Solar-Energiesensor"
         },
         "data_description": {
-          "solar_sensor": "Wähle den Sensor, der die gesamte Solarenergieproduktion (kWh) erfasst. Dieser wird für das automatische Modell-Training verwendet.",
+          "solar_sensor": "Vorausgefüllt mit der Solar-Quelle aus deinem Energie-Dashboard, sofern vorhanden. Wähle den Sensor, der die gesamte Solarenergieproduktion (kWh) erfasst – wird für das automatische Modell-Training verwendet.",
           "city": "Gib einen Stadtnamen ein, um deinen Standort zu suchen."
         }
       },

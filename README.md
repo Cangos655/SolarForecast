@@ -40,7 +40,7 @@ That's it — the Lovelace card ships with the integration and registers itself 
 2. Search for **Solar Forecast**
 3. Follow the setup wizard:
    - Choose your location (HA home coordinates or city search)
-   - Select your solar energy sensor from the dropdown
+   - Select your solar energy sensor from the dropdown — pre-filled from your [Energy Dashboard](https://www.home-assistant.io/home-energy-management/)'s configured solar source when available, so there's usually nothing to change here
 
 The sensor must be a cumulative energy sensor (not a daily-reset measurement). After setup, the model trains automatically within the first update cycle.
 

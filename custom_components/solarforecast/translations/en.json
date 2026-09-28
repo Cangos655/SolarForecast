@@ -10,7 +10,7 @@
           "solar_sensor": "Solar energy sensor"
         },
         "data_description": {
-          "solar_sensor": "Select the sensor that tracks your total solar energy production (kWh). This is used for automatic model training.",
+          "solar_sensor": "Pre-filled from your Energy Dashboard's solar source when available. Select the sensor that tracks your total solar energy production (kWh) - used for automatic model training.",
           "city": "Enter a city name to search for your location."
         }
       },

@@ -5,9 +5,8 @@
   "documentation": "https://github.com/Cangos655/SolarForecast",
   "issue_tracker": "https://github.com/Cangos655/SolarForecast/issues",
   "requirements": ["aiohttp>=3.8.0"],
-  "dependencies": ["recorder"],
+  "dependencies": ["recorder", "http", "frontend"],
   "codeowners": ["@Cangos655"],
   "iot_class": "cloud_polling",
-  "config_flow": true,
-  "homeassistant": "2024.7.0"
+  "config_flow": true
 }

@@ -1,0 +1,74 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Solar Forecast Einrichtung",
+        "description": "Verbinde Solar Forecast mit deinem Solar-Energiesensor und wähle einen Standort für Wettervorhersagen.",
+        "data": {
+          "location_mode": "Standortquelle",
+          "city": "Stadtname (bei Suche)",
+          "solar_sensor": "Solar-Energiesensor"
+        },
+        "data_description": {
+          "solar_sensor": "Wähle den Sensor, der die gesamte Solarenergieproduktion (kWh) erfasst. Dieser wird für das automatische Modell-Training verwendet.",
+          "city": "Gib einen Stadtnamen ein, um deinen Standort zu suchen."
+        }
+      },
+      "pick_location": {
+        "title": "Standort auswählen",
+        "description": "Es wurden mehrere Standorte gefunden. Bitte wähle den richtigen aus.",
+        "data": {
+          "location": "Standort"
+        }
+      },
+      "advanced": {
+        "title": "Erweiterte Einstellungen",
+        "description": "Passe die Temperaturkompensation für deine Solarmodule an. Die Standardwerte funktionieren für die meisten Anlagen gut.",
+        "data": {
+          "temp_coefficient": "Temperaturkoeffizient (pro °C)",
+          "cell_temp_offset": "Zelltemperatur-Offset (°C über Lufttemperatur)"
+        },
+        "data_description": {
+          "temp_coefficient": "Effizienzverlust pro Grad Celsius über 25°C (STC). Typischer Wert: 0.004 (0,4%).",
+          "cell_temp_offset": "Geschätzte Zelltemperatur über der Lufttemperatur. Typischer Wert: 10°C."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zur Open-Meteo API fehlgeschlagen. Bitte Internetverbindung prüfen.",
+      "city_not_found": "Kein Standort für diesen Stadtnamen gefunden. Bitte anderen Suchbegriff verwenden.",
+      "city_required": "Bitte einen Stadtnamen eingeben.",
+      "no_energy_sensors": "Keine Energiesensoren in Home Assistant gefunden. Bitte zuerst einen Solar-Energiesensor hinzufügen."
+    },
+    "abort": {
+      "already_configured": "Solar Forecast ist für diesen Standort bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Solar Forecast Optionen",
+        "data": {
+          "solar_sensor": "Solar-Energiesensor",
+          "temp_coefficient": "Temperaturkoeffizient (pro °C)",
+          "cell_temp_offset": "Zelltemperatur-Offset (°C über Lufttemperatur)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "today": {"name": "Solar Prognose Heute"},
+      "tomorrow": {"name": "Solar Prognose Morgen"},
+      "day_3": {"name": "Solar Prognose Tag 3"},
+      "day_4": {"name": "Solar Prognose Tag 4"},
+      "day_5": {"name": "Solar Prognose Tag 5"},
+      "day_6": {"name": "Solar Prognose Tag 6"},
+      "day_7": {"name": "Solar Prognose Tag 7"},
+      "day_8": {"name": "Solar Prognose Tag 8"},
+      "model_accuracy": {"name": "Solar Modell-Genauigkeit"},
+      "training_count": {"name": "Solar Trainingseinträge"},
+      "today_condition": {"name": "Solar Heutige Bedingung"}
+    }
+  }
+}

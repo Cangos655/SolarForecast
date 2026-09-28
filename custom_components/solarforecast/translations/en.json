@@ -1,0 +1,74 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Solar Forecast Setup",
+        "description": "Connect Solar Forecast to your solar energy sensor and choose a location for weather forecasts.",
+        "data": {
+          "location_mode": "Location source",
+          "city": "City name (if searching)",
+          "solar_sensor": "Solar energy sensor"
+        },
+        "data_description": {
+          "solar_sensor": "Select the sensor that tracks your total solar energy production (kWh). This is used for automatic model training.",
+          "city": "Enter a city name to search for your location."
+        }
+      },
+      "pick_location": {
+        "title": "Choose Location",
+        "description": "Multiple locations were found. Please select the correct one.",
+        "data": {
+          "location": "Location"
+        }
+      },
+      "advanced": {
+        "title": "Advanced Settings",
+        "description": "Fine-tune the temperature compensation for your solar panels. The defaults work well for most installations.",
+        "data": {
+          "temp_coefficient": "Temperature coefficient (per °C)",
+          "cell_temp_offset": "Cell temperature offset (°C above air temp)"
+        },
+        "data_description": {
+          "temp_coefficient": "Efficiency loss per degree Celsius above 25°C (STC). Typical value: 0.004 (0.4%).",
+          "cell_temp_offset": "Estimated cell temperature above air temperature. Typical value: 10°C."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the Open-Meteo API. Please check your internet connection.",
+      "city_not_found": "No location found for this city name. Please try a different search term.",
+      "city_required": "Please enter a city name.",
+      "no_energy_sensors": "No energy sensors found in Home Assistant. Please add a solar energy sensor first."
+    },
+    "abort": {
+      "already_configured": "Solar Forecast is already configured for this location."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Solar Forecast Options",
+        "data": {
+          "solar_sensor": "Solar energy sensor",
+          "temp_coefficient": "Temperature coefficient (per °C)",
+          "cell_temp_offset": "Cell temperature offset (°C above air temp)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "today": {"name": "Solar Forecast Today"},
+      "tomorrow": {"name": "Solar Forecast Tomorrow"},
+      "day_3": {"name": "Solar Forecast Day 3"},
+      "day_4": {"name": "Solar Forecast Day 4"},
+      "day_5": {"name": "Solar Forecast Day 5"},
+      "day_6": {"name": "Solar Forecast Day 6"},
+      "day_7": {"name": "Solar Forecast Day 7"},
+      "day_8": {"name": "Solar Forecast Day 8"},
+      "model_accuracy": {"name": "Solar Forecast Model Accuracy"},
+      "training_count": {"name": "Solar Forecast Training Entries"},
+      "today_condition": {"name": "Solar Forecast Today Condition"}
+    }
+  }
+}

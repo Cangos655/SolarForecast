@@ -8,7 +8,7 @@
  *   title: "My Solar Forecast"         (optional)
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 const WEATHER_ICONS = {
   0: "☀️", 1: "🌤", 2: "⛅", 3: "☁️",
@@ -415,22 +415,16 @@ class SolarForecastCard extends HTMLElement {
 customElements.define("solarforecast-card", SolarForecastCard);
 
 // ---------------------------------------------------------------------------
-// Card Editor (GUI configuration) – uses native ha-form with entity pickers
+// Card Editor (GUI configuration)
+//
+// Sensors are auto-discovered (see discoverSolarForecastEntities) and there
+// is realistically only one Solar Forecast instance per HA install, so the
+// visual editor only exposes the title. Multi-instance setups can still set
+// entity_today / entity_prefix etc. by hand via the card's YAML/code editor.
 // ---------------------------------------------------------------------------
 
 const EDITOR_SCHEMA = [
-  { name: "title",            label: "Titel",                      selector: { text: {} } },
-  { name: "entity_today",     label: "Sensor: Heute",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_tomorrow",  label: "Sensor: Morgen",             selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_day3",      label: "Sensor: Tag 3",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_day4",      label: "Sensor: Tag 4",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_day5",      label: "Sensor: Tag 5",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_day6",      label: "Sensor: Tag 6",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_day7",      label: "Sensor: Tag 7",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_day8",      label: "Sensor: Tag 8",              selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_accuracy",  label: "Sensor: Modell-Genauigkeit", selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_training",  label: "Sensor: Trainings-Einträge", selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
-  { name: "entity_condition", label: "Sensor: Wetterbedingung",    selector: { entity: { filter: { integration: "solarforecast", domain: "sensor" } } } },
+  { name: "title", label: "Titel", selector: { text: {} } },
 ];
 
 class SolarForecastCardEditor extends HTMLElement {
@@ -445,20 +439,6 @@ class SolarForecastCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (this._form) this._form.hass = hass;
-    // Auto-fill entities on first hass set if config is empty
-    if (hass && !this._autoFilled && !this._config.entity_today) {
-      this._autoFilled = true;
-      const disc = discoverSolarForecastEntities(hass);
-      if (disc) {
-        this._config = { ...this._config, ...disc };
-        if (this._form) this._form.data = this._config;
-        this.dispatchEvent(new CustomEvent("config-changed", {
-          detail: { config: this._config },
-          bubbles: true,
-          composed: true,
-        }));
-      }
-    }
   }
 
   setConfig(config) {

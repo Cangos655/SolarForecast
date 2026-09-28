@@ -66,7 +66,7 @@ type: custom:solarforecast-card
 title: Solar Forecast  # optional
 ```
 
-Sensors can also be configured manually via the visual card editor, or in YAML (e.g. if you have multiple instances):
+The visual card editor only exposes the title, since sensors are auto-discovered and there is realistically only one instance per install. If you run multiple instances, override individual sensors in YAML (via the card's code editor):
 
 ```yaml
 type: custom:solarforecast-card

@@ -76,22 +76,23 @@ async def _async_register_frontend_resources(hass: HomeAssistant) -> None:
     www_dir = Path(__file__).parent / "www"
     version = (await async_get_integration(hass, DOMAIN)).version
 
-    # Cached so reloads don't refetch the card over slow/external connections
-    # (HA only waits ~2s for a card's custom element to be defined); the
-    # version query string below busts the cache on every update.
     try:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL_PATH, str(www_dir), True)]
+            [StaticPathConfig(CARD_URL_PATH, str(www_dir), False)]
         )
     except ImportError:
         # Older Home Assistant core without StaticPathConfig
-        hass.http.register_static_path(CARD_URL_PATH, str(www_dir), True)
+        hass.http.register_static_path(CARD_URL_PATH, str(www_dir), False)
 
-    card_url = f"{CARD_URL_PATH}/{CARD_FILENAME}?v={version}"
-    add_extra_js_url(hass, card_url)
-    await _async_sync_lovelace_resource(hass, card_url)
+    # Two deliberately different URLs: the browser loads each as its own
+    # module. Page loads were observed receiving an empty (0 byte) response
+    # for the card, which a shared URL would make permanent for both paths;
+    # the card guards against double definition, so whichever loads wins.
+    base_url = f"{CARD_URL_PATH}/{CARD_FILENAME}?v={version}"
+    add_extra_js_url(hass, base_url)
+    await _async_sync_lovelace_resource(hass, f"{base_url}&via=resource")
     hass.data.setdefault(DOMAIN, {})["_frontend_registered"] = True
 
 

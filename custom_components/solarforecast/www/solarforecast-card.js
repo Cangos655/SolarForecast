@@ -8,7 +8,7 @@
  *   title: "My Solar Forecast"         (optional)
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.1";
 
 const WEATHER_ICONS = {
   0: "☀️", 1: "🌤", 2: "⛅", 3: "☁️",
@@ -412,7 +412,9 @@ class SolarForecastCard extends HTMLElement {
   }
 }
 
-customElements.define("solarforecast-card", SolarForecastCard);
+if (!customElements.get("solarforecast-card")) {
+  customElements.define("solarforecast-card", SolarForecastCard);
+}
 
 // ---------------------------------------------------------------------------
 // Card Editor (GUI configuration)
@@ -471,7 +473,9 @@ class SolarForecastCardEditor extends HTMLElement {
   }
 }
 
-customElements.define("solarforecast-card-editor", SolarForecastCardEditor);
+if (!customElements.get("solarforecast-card-editor")) {
+  customElements.define("solarforecast-card-editor", SolarForecastCardEditor);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({

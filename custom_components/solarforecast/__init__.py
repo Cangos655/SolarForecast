@@ -23,6 +23,47 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
 
 
+def _get_lovelace_resources(hass: HomeAssistant):
+    """Return the storage-mode Lovelace resource collection, else None."""
+    lovelace = hass.data.get("lovelace")
+    resources = getattr(lovelace, "resources", None)
+    if resources is None and isinstance(lovelace, dict):
+        resources = lovelace.get("resources")
+    return resources if hasattr(resources, "async_create_item") else None
+
+
+async def _async_sync_lovelace_resource(
+    hass: HomeAssistant, url: str | None
+) -> None:
+    """Create/update (url given) or remove (url None) our dashboard resource.
+
+    Dashboard resources are loaded before cards render, unlike extra JS
+    modules, which race against HA's ~2s wait for a card element.
+    """
+    resources = _get_lovelace_resources(hass)
+    if resources is None:
+        return  # YAML mode or no Lovelace resources: extra JS URL still applies
+    try:
+        if not getattr(resources, "loaded", True):
+            await resources.async_load()
+            resources.loaded = True
+        base = f"{CARD_URL_PATH}/{CARD_FILENAME}"
+        ours = [i for i in resources.async_items() if i["url"].split("?")[0] == base]
+        if url is None:
+            for item in ours:
+                await resources.async_delete_item(item["id"])
+            return
+        if not ours:
+            await resources.async_create_item({"res_type": "module", "url": url})
+            return
+        if ours[0]["url"] != url:
+            await resources.async_update_item(ours[0]["id"], {"url": url})
+        for extra in ours[1:]:
+            await resources.async_delete_item(extra["id"])
+    except Exception:  # noqa: BLE001 - never block setup over a dashboard resource
+        _LOGGER.warning("Could not sync Lovelace resource for the card", exc_info=True)
+
+
 async def _async_register_frontend_resources(hass: HomeAssistant) -> None:
     """Serve the bundled card from www/ and register it as an extra JS module.
 
@@ -48,7 +89,9 @@ async def _async_register_frontend_resources(hass: HomeAssistant) -> None:
         # Older Home Assistant core without StaticPathConfig
         hass.http.register_static_path(CARD_URL_PATH, str(www_dir), True)
 
-    add_extra_js_url(hass, f"{CARD_URL_PATH}/{CARD_FILENAME}?v={version}")
+    card_url = f"{CARD_URL_PATH}/{CARD_FILENAME}?v={version}"
+    add_extra_js_url(hass, card_url)
+    await _async_sync_lovelace_resource(hass, card_url)
     hass.data.setdefault(DOMAIN, {})["_frontend_registered"] = True
 
 
@@ -77,6 +120,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the dashboard resource once the last entry is deleted."""
+    remaining = [
+        e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+    ]
+    if not remaining:
+        await _async_sync_lovelace_resource(hass, None)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

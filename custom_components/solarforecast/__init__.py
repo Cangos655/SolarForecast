@@ -13,6 +13,7 @@ from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.loader import async_get_integration
 
 from .const import CARD_FILENAME, CARD_URL_PATH, DOMAIN
 from .coordinator import SolarForecastCoordinator
@@ -32,18 +33,22 @@ async def _async_register_frontend_resources(hass: HomeAssistant) -> None:
         return
 
     www_dir = Path(__file__).parent / "www"
+    version = (await async_get_integration(hass, DOMAIN)).version
 
+    # Cached so reloads don't refetch the card over slow/external connections
+    # (HA only waits ~2s for a card's custom element to be defined); the
+    # version query string below busts the cache on every update.
     try:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL_PATH, str(www_dir), False)]
+            [StaticPathConfig(CARD_URL_PATH, str(www_dir), True)]
         )
     except ImportError:
         # Older Home Assistant core without StaticPathConfig
-        hass.http.register_static_path(CARD_URL_PATH, str(www_dir), False)
+        hass.http.register_static_path(CARD_URL_PATH, str(www_dir), True)
 
-    add_extra_js_url(hass, f"{CARD_URL_PATH}/{CARD_FILENAME}")
+    add_extra_js_url(hass, f"{CARD_URL_PATH}/{CARD_FILENAME}?v={version}")
     hass.data.setdefault(DOMAIN, {})["_frontend_registered"] = True
 
 

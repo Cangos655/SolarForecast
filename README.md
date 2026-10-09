@@ -4,7 +4,7 @@ A HACS-compatible custom integration that predicts your daily solar panel energy
 
 📖 Blog post (German): [PV-Prognose in Home Assistant mit Solar Forecast](https://itrend24.de/pv-prognose-home-assistant-solar-forecast/)
 
-![Solar Forecast Screenshot](screenshot.png)
+<p align="center"><img src="screenshot.png" alt="Solar Forecast Lovelace card: today's forecast, 4-day strip and model training status" width="420"></p>
 
 ## Features
 
@@ -42,18 +42,20 @@ That's it — the Lovelace card ships with the integration and registers itself 
    - Choose your location (HA home coordinates or city search)
    - Select your solar energy sensor from the dropdown — pre-filled from your [Energy Dashboard](https://www.home-assistant.io/home-energy-management/)'s configured solar source when available, so there's usually nothing to change here
 
-The sensor must be a cumulative energy sensor (not a daily-reset measurement). After setup, the model trains automatically within the first update cycle.
+The sensor must be an energy sensor with state class `total` or `total_increasing`. Both lifetime totals and sensors that reset daily (e.g. "PV daily yield") work, because Home Assistant's long-term statistics already handle the resets. After setup, the model trains automatically within the first update cycle.
 
 ## Sensors Created
 
+The entity IDs start with your location name, e.g. `sensor.home_solar_forecast_today` for a location called "Home". The table shows them without that prefix:
+
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.solar_forecast_today` | kWh | Forecasted yield today |
-| `sensor.solar_forecast_tomorrow` | kWh | Forecasted yield tomorrow |
-| `sensor.solar_forecast_day_3` … `_day_8` | kWh | Days +2 to +7 |
-| `sensor.solar_forecast_model_accuracy` | % | How well-trained the model is (0–100%) |
-| `sensor.solar_forecast_training_count` | — | Number of real training data points |
-| `sensor.solar_forecast_today_condition` | — | Weather bucket: sunny / mixed / overcast |
+| `…_solar_forecast_today` | kWh | Forecasted yield today |
+| `…_solar_forecast_tomorrow` | kWh | Forecasted yield tomorrow |
+| `…_solar_forecast_day_3` … `_day_8` | kWh | Days +2 to +7 |
+| `…_solar_forecast_model_accuracy` | % | How well-trained the model is (0–100%) |
+| `…_solar_forecast_training_count` | — | Number of real training data points |
+| `…_solar_forecast_today_condition` | — | Weather bucket: sunny / mixed / overcast |
 
 Each forecast sensor includes attributes: `date`, `weather_code`, `radiation_mj_m2`, `temp_max_c`, `temp_min_c`, `condition`, `sunrise`, `sunset`.
 
@@ -71,13 +73,13 @@ The visual card editor only exposes the title, since sensors are auto-discovered
 ```yaml
 type: custom:solarforecast-card
 title: Solar Forecast
-entity_today: sensor.solar_forecast_today
-entity_tomorrow: sensor.solar_forecast_tomorrow
-entity_day3: sensor.solar_forecast_day_3
-entity_day4: sensor.solar_forecast_day_4
-entity_accuracy: sensor.solar_forecast_model_accuracy
-entity_training: sensor.solar_forecast_training_count
-entity_condition: sensor.solar_forecast_today_condition
+entity_today: sensor.home_solar_forecast_today
+entity_tomorrow: sensor.home_solar_forecast_tomorrow
+entity_day3: sensor.home_solar_forecast_day_3
+entity_day4: sensor.home_solar_forecast_day_4
+entity_accuracy: sensor.home_solar_forecast_model_accuracy
+entity_training: sensor.home_solar_forecast_training_count
+entity_condition: sensor.home_solar_forecast_today_condition
 ```
 
 Displays: today's yield, weather condition and temperature; a 5-day forecast strip; and a compact ML training overview (Sunny / Mixed / Overcast · Accuracy).

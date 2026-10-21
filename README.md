@@ -27,10 +27,8 @@ A HACS-compatible custom integration that predicts your daily solar panel energy
 ### Via HACS (recommended)
 
 1. Open HACS in Home Assistant
-2. Go to **Integrations** → click the three-dot menu → **Custom repositories**
-3. Add `https://github.com/Cangos655/SolarForecast` as type **Integration**
-4. Search for **Solar Forecast** and install
-5. Restart Home Assistant
+2. Search for **Solar Forecast** and download it
+3. Restart Home Assistant
 
 That's it — the Lovelace card ships with the integration and registers itself automatically. No separate frontend/plugin install is needed.
 

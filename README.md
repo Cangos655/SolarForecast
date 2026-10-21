@@ -1,3 +1,5 @@
+<p align="center"><img src="custom_components/solarforecast/brand/icon@2x.png" alt="Solar Forecast" width="120"></p>
+
 # Solar Forecast – Solar Yield Forecasting for Home Assistant
 
 A HACS-compatible custom integration that predicts your daily solar panel energy production using a self-learning ML model trained automatically from your Home Assistant Energy Dashboard data — with a built-in Lovelace card, no separate frontend install required.

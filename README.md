@@ -115,3 +115,7 @@ Newer data is weighted 10× more than older data (linear weighting from 10 down 
 ## History
 
 This project merges what used to be two separate repositories (`solarindex-ha` integration + `solarindex-card` frontend card) into a single, self-contained HACS integration.
+
+## Support
+
+SolarForecast is free and stays free. If it is useful to you and you would like to support the project, I'd appreciate a coffee: [paypal.me/itrend24](https://www.paypal.me/itrend24)

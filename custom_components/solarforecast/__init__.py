@@ -10,12 +10,14 @@ import logging
 from pathlib import Path
 
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.recorder import get_instance
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.loader import async_get_integration
 
-from .const import CARD_FILENAME, CARD_URL_PATH, DOMAIN
+from .const import CARD_FILENAME, CARD_URL_PATH, DOMAIN, FORECAST_DAY_LABELS
 from .coordinator import SolarForecastCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,6 +96,37 @@ async def _async_register_frontend_resources(hass: HomeAssistant) -> None:
     add_extra_js_url(hass, base_url)
     await _async_sync_lovelace_resource(hass, f"{base_url}&via=resource")
     hass.data.setdefault(DOMAIN, {})["_frontend_registered"] = True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate a config entry from an earlier version."""
+    if entry.version == 1 and entry.minor_version < 2:
+        _clear_forecast_statistics(hass, entry)
+        hass.config_entries.async_update_entry(entry, minor_version=2)
+    return True
+
+
+def _clear_forecast_statistics(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the long-term statistics the forecast sensors left behind.
+
+    Up to v1.0.9 they had a state class. Without this cleanup Home Assistant
+    reports one repair per sensor for statistics nothing uses any more.
+    """
+    registry = er.async_get(hass)
+    entity_ids = [
+        entity_id
+        for label in FORECAST_DAY_LABELS
+        if (
+            entity_id := registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{entry.entry_id}_{label}"
+            )
+        )
+    ]
+    if not entity_ids:
+        return
+    get_instance(hass).async_clear_statistics(entity_ids)
+    for entity_id in entity_ids:
+        ir.async_delete_issue(hass, "sensor", f"state_class_removed_{entity_id}")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

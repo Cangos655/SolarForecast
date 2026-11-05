@@ -17,21 +17,10 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, FORECAST_DAY_LABELS
 from .coordinator import SolarForecastCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-_DAY_LABELS = [
-    "today",
-    "tomorrow",
-    "day_3",
-    "day_4",
-    "day_5",
-    "day_6",
-    "day_7",
-    "day_8",
-]
 
 
 async def async_setup_entry(
@@ -45,7 +34,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
 
     # Forecast sensors (today + 7 days)
-    for i, label in enumerate(_DAY_LABELS):
+    for i, label in enumerate(FORECAST_DAY_LABELS):
         entities.append(SolarForecastForecastSensor(coordinator, entry, i, label))
 
     # Meta sensors

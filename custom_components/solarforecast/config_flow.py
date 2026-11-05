@@ -97,6 +97,7 @@ class SolarForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the Solar Forecast config flow."""
 
     VERSION = 1
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}

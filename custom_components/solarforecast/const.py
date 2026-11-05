@@ -54,6 +54,18 @@ ARCHIVE_LOOKBACK_DAYS = 30
 MIN_YIELD_KWH = 0.5   # Minimum daily yield to accept as a valid training entry
 MAX_OPTICAL_INDEX = 4.0  # Physical sanity limit – values above this indicate a wrong sensor
 
+# Unique ID suffixes of the daily forecast sensors
+FORECAST_DAY_LABELS = [
+    "today",
+    "tomorrow",
+    "day_3",
+    "day_4",
+    "day_5",
+    "day_6",
+    "day_7",
+    "day_8",
+]
+
 # Sensor names
 SENSOR_TODAY = "today"
 SENSOR_TOMORROW = "tomorrow"

@@ -106,7 +106,8 @@ class SolarForecastForecastSensor(SolarForecastBaseSensor):
         self._day_index = day_index
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
         self._attr_device_class = SensorDeviceClass.ENERGY
-        self._attr_state_class = SensorStateClass.MEASUREMENT
+        # No state class: a forecast is neither a present measurement nor a
+        # running total, and energy sensors only allow total/total_increasing.
         self._attr_icon = "mdi:solar-power"
 
     @property

@@ -2,7 +2,7 @@
 
 # Solar Forecast – Solar Yield Forecasting for Home Assistant
 
-A HACS-compatible custom integration that predicts your daily solar panel energy production using a self-learning ML model trained automatically from your Home Assistant Energy Dashboard data — with a built-in Lovelace card, no separate frontend install required.
+A custom integration, available in the Home Assistant Marketplace and in HACS, that predicts your daily solar panel energy production using a self-learning ML model trained automatically from your Home Assistant Energy Dashboard data — with a built-in Lovelace card, no separate frontend install required.
 
 📖 Blog post (German): [PV-Prognose in Home Assistant mit Solar Forecast](https://itrend24.de/pv-prognose-home-assistant-solar-forecast/)
 
@@ -15,24 +15,34 @@ A HACS-compatible custom integration that predicts your daily solar panel energy
 - **Weather-bucketed learning** – separate efficiency curves for sunny, mixed, and overcast days
 - **Temperature compensation** – accounts for panel efficiency loss at high temperatures
 - **11 HA sensor entities** – usable in automations, dashboards, and Energy cards
-- **Built-in Lovelace card** – bundled with the integration and auto-registered as a frontend resource, no second HACS install needed
+- **Built-in Lovelace card** – bundled with the integration and auto-registered as a frontend resource, no separate card install needed
 - **Fully configurable via HA UI** – no YAML needed
 
 ## Requirements
 
 - Home Assistant 2024.7 or newer
-- A solar energy sensor with `device_class: energy` and `state_class: total_increasing` (e.g. from a Fronius, SMA, Huawei, or Shelly inverter integration)
-- HACS installed
+- A solar energy sensor with `device_class: energy` and `state_class: total_increasing` or `total` (e.g. from a Fronius, SMA, Huawei, or Shelly inverter integration)
+- Home Assistant 2026.11 or newer: nothing else, the Marketplace is built in. Older versions: HACS
 
 ## Installation
 
-### Via HACS (recommended)
+The Lovelace card ships with the integration and registers itself automatically, so no separate frontend/plugin install is needed. If the card isn't offered right after installing, reload your browser.
+
+### Via the Marketplace (Home Assistant 2026.11 or newer, recommended)
+
+Since 2026.11, HACS is built into Home Assistant as the [Marketplace](https://www.home-assistant.io/integrations/marketplace/). No GitHub account is needed.
+
+1. Go to **Settings → Marketplace**
+2. Search for **Solar Forecast** and select **Install**. The first time, you need to accept the Marketplace's notice about community projects
+3. Home Assistant opens the setup wizard directly, without a restart. Continue with step 3 under [Setup](#setup)
+
+Updates still need a restart. If you used HACS before 2026.11, Home Assistant migrates it automatically: Solar Forecast stays installed and keeps receiving updates.
+
+### Via HACS (Home Assistant before 2026.11)
 
 1. Open HACS in Home Assistant
 2. Search for **Solar Forecast** and download it
 3. Restart Home Assistant
-
-That's it — the Lovelace card ships with the integration and registers itself automatically. No separate frontend/plugin install is needed.
 
 ## Setup
 
@@ -42,7 +52,7 @@ That's it — the Lovelace card ships with the integration and registers itself 
    - Choose your location (HA home coordinates or city search)
    - Select your solar energy sensor from the dropdown — pre-filled from your [Energy Dashboard](https://www.home-assistant.io/home-energy-management/)'s configured solar source when available, so there's usually nothing to change here
 
-The sensor must be an energy sensor with state class `total` or `total_increasing`. Both lifetime totals and sensors that reset daily (e.g. "PV daily yield") work, because Home Assistant's long-term statistics already handle the resets. After setup, the model trains automatically within the first update cycle.
+The sensor must be an energy sensor with state class `total` or `total_increasing`, because the yield is read from Home Assistant's long-term statistics. Lifetime totals work with either. Sensors that reset daily (e.g. "PV daily yield") work with `total_increasing`, or with `total` if the sensor also updates `last_reset`. Without `last_reset`, the statistics count the midnight reset as a drop and those days are wrong. After setup, the model trains automatically within the first update cycle.
 
 ## Sensors Created
 
@@ -82,7 +92,7 @@ entity_training: sensor.home_solar_forecast_training_count
 entity_condition: sensor.home_solar_forecast_today_condition
 ```
 
-Displays: today's yield, weather condition and temperature; a 5-day forecast strip; and a compact ML training overview (Sunny / Mixed / Overcast · Accuracy).
+Displays: today's yield, weather condition and temperature; a 4-day forecast strip; and a compact ML training overview (Sunny / Mixed / Overcast · Accuracy).
 
 ## How the ML Model Works
 
@@ -114,7 +124,7 @@ Newer data is weighted 10× more than older data (linear weighting from 10 down 
 
 ## History
 
-This project merges what used to be two separate repositories (`solarindex-ha` integration + `solarindex-card` frontend card) into a single, self-contained HACS integration.
+This project merges what used to be two separate repositories (`solarindex-ha` integration + `solarindex-card` frontend card) into a single, self-contained integration.
 
 ## Support
 

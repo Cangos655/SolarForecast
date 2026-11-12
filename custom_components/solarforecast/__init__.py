@@ -103,6 +103,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version == 1 and entry.minor_version < 2:
         _clear_forecast_statistics(hass, entry)
         hass.config_entries.async_update_entry(entry, minor_version=2)
+    if entry.version == 1 and entry.minor_version < 3:
+        # 1.1: hourly forecast. The new options (tilt, azimuth, learn from)
+        # are optional and default to "not set", the stored data stays as it
+        # is; only the version is recorded.
+        hass.config_entries.async_update_entry(entry, minor_version=3)
     return True
 
 
@@ -137,6 +142,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = SolarForecastCoordinator(hass, entry)
     await coordinator._load_history()
+    await coordinator._load_hourly()
     await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator

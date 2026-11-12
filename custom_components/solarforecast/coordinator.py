@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from homeassistant.components.recorder import get_instance
@@ -17,17 +18,23 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ARCHIVE_LOOKBACK_DAYS,
+    CONF_AZIMUTH,
     CONF_CELL_TEMP_OFFSET,
     CONF_LATITUDE,
+    CONF_LEARN_FROM,
     CONF_LONGITUDE,
     CONF_SOLAR_SENSOR,
     CONF_TEMP_COEFFICIENT,
+    CONF_TILT,
     DEFAULT_CELL_TEMP_OFFSET,
     DEFAULT_TEMP_COEFFICIENT,
     DOMAIN,
+    HOURLY_BOOTSTRAP_DAYS,
+    HOURLY_MAX_DAYS,
     MIN_YIELD_KWH,
     UPDATE_INTERVAL,
 )
+from .hourly import Sample, hourly_forecast, learn_factors
 from .ml_engine import (
     TrainingEntry,
     calculate_expected_yield,
@@ -35,12 +42,13 @@ from .ml_engine import (
     get_model_accuracy,
     save_training_entry,
 )
-from .weather_api import fetch_forecast, fetch_historical_range
+from .weather_api import fetch_forecast, fetch_historical_range, fetch_hourly_history
 
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_history"
+HOURLY_STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_hourly"
 
 # Bump this when the date attribution logic changes to force a clean retrain
 CURRENT_DATA_VERSION = 5
@@ -66,6 +74,11 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         self._solar_sensor: str = cfg[CONF_SOLAR_SENSOR]
         self._temp_coefficient: float = cfg.get(CONF_TEMP_COEFFICIENT, DEFAULT_TEMP_COEFFICIENT)
         self._cell_temp_offset: int = cfg.get(CONF_CELL_TEMP_OFFSET, DEFAULT_CELL_TEMP_OFFSET)
+        self._tilt: float | None = _optional_float(cfg.get(CONF_TILT))
+        self._azimuth: float | None = _optional_float(cfg.get(CONF_AZIMUTH))
+        if self._tilt is None or self._azimuth is None:
+            self._tilt = self._azimuth = None  # tilted irradiance needs both
+        self._learn_from: date | None = _optional_date(cfg.get(CONF_LEARN_FROM))
 
         self._store: Store = Store(
             hass,
@@ -73,6 +86,15 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             STORAGE_KEY_TEMPLATE.format(entry_id=config_entry.entry_id),
         )
         self._history: list[TrainingEntry] = []
+
+        # Hourly model: learned hours (see hourly.py)
+        self._hourly_store: Store = Store(
+            hass,
+            STORAGE_VERSION,
+            HOURLY_STORAGE_KEY_TEMPLATE.format(entry_id=config_entry.entry_id),
+        )
+        self._samples: list[Sample] = []
+        self._hourly_checked: date | None = None
 
         super().__init__(
             hass,
@@ -108,6 +130,13 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
     def model_accuracy(self) -> float:
         return get_model_accuracy(self._history)
 
+    @property
+    def orientation_signature(self) -> str:
+        """Which irradiance the hourly samples were learned against."""
+        if self._tilt is None:
+            return "horizontal"
+        return f"{self._tilt:g}/{self._azimuth:g}"
+
     # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------
@@ -137,6 +166,13 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             return
 
         self._history = stored["history"]
+        if self._learn_from is not None:
+            cutoff = self._learn_from.isoformat()
+            kept = [e for e in self._history if e.get("date", "") >= cutoff]
+            if len(kept) != len(self._history):
+                _LOGGER.info("Dropping %d training entries before %s", len(self._history) - len(kept), cutoff)
+                self._history = kept
+                await self._save_history()
 
         # Remove any stale entries with invalid ISO date format (e.g. "2026-03-20_auto_overcast")
         valid = [e for e in self._history if self._is_valid_iso_date(e.get("date", ""))]
@@ -150,6 +186,22 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
 
     async def _save_history(self) -> None:
         await self._store.async_save({"history": self._history, "data_version": CURRENT_DATA_VERSION})
+
+    async def _load_hourly(self) -> None:
+        stored = await self._hourly_store.async_load()
+        if not stored or stored.get("orientation") != self.orientation_signature:
+            # New install, or tilt/azimuth changed: the stored irradiance no
+            # longer fits, learn again from the recorder.
+            self._samples = []
+            return
+        self._samples = [Sample(int(t), float(e), float(i)) for t, e, i in stored.get("samples", [])]
+        _LOGGER.debug("Loaded %d learned hours", len(self._samples))
+
+    async def _save_hourly(self) -> None:
+        await self._hourly_store.async_save({
+            "orientation": self.orientation_signature,
+            "samples": [[s.start, round(s.energy_kwh, 4), round(s.irradiance, 1)] for s in self._samples],
+        })
 
     # ------------------------------------------------------------------
     # HA Recorder: read daily solar statistics
@@ -229,12 +281,106 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Read %d daily solar yield entries from recorder", len(daily_yields))
         return daily_yields
 
+    async def _get_hourly_solar_yields(self, start: datetime, end: datetime) -> dict[int, float]:
+        """Return {hour start epoch: kWh} from the recorder's hourly statistics."""
+        try:
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                start,
+                end,
+                {self._solar_sensor},
+                "hour",
+                None,
+                {"change"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Could not read hourly recorder statistics: %s", exc)
+            return {}
+
+        yields: dict[int, float] = {}
+        for row in stats.get(self._solar_sensor, []):
+            row_start = row["start"] if isinstance(row, dict) else row.start
+            change = row.get("change") if isinstance(row, dict) else getattr(row, "change", None)
+            if change is None:
+                continue
+            if isinstance(row_start, datetime):
+                row_start = row_start.timestamp()
+            # Negative changes are meter resets, not production
+            yields[int(row_start)] = max(0.0, float(change))
+        return yields
+
+    async def _update_hourly_samples(self) -> bool:
+        """Learn the hours of days not learned yet.
+
+        Succeeds once per day; after a failed request it tries again with the
+        next update. The last learned day is fetched again, so hours the
+        weather archive did not have yet are filled in later.
+        """
+        today = dt_util.now().date()
+        if self._hourly_checked == today:
+            return False
+
+        yesterday = today - timedelta(days=1)
+        if self._samples:
+            first_day = dt_util.as_local(dt_util.utc_from_timestamp(max(s.start for s in self._samples))).date()
+        else:
+            first_day = today - timedelta(days=HOURLY_BOOTSTRAP_DAYS)
+        if self._learn_from is not None:
+            first_day = max(first_day, self._learn_from)
+        first_day = max(first_day, today - timedelta(days=HOURLY_BOOTSTRAP_DAYS))
+        if first_day > yesterday:
+            self._hourly_checked = today
+            return False
+
+        start = dt_util.start_of_local_day(first_day)
+        end = dt_util.start_of_local_day(today)
+        yields = await self._get_hourly_solar_yields(start, end)
+        if not yields:
+            return False
+
+        session = async_get_clientsession(self.hass)
+        # UTC dates around the local range, the API is queried in UTC
+        irradiance = await fetch_hourly_history(
+            session,
+            self._latitude,
+            self._longitude,
+            (first_day - timedelta(days=1)).isoformat(),
+            yesterday.isoformat(),
+            self._tilt,
+            self._azimuth,
+        )
+        if not irradiance:
+            return False
+
+        known = {s.start for s in self._samples}
+        start_epoch, end_epoch = start.timestamp(), end.timestamp()
+        new = [
+            Sample(epoch, yields[epoch], irradiance[epoch])
+            for epoch in sorted(yields)
+            if epoch in irradiance
+            and epoch not in known
+            and start_epoch <= epoch < end_epoch
+            and (irradiance[epoch] > 0 or yields[epoch] > 0)
+        ]
+        self._hourly_checked = today
+        if not new:
+            return False
+
+        oldest = (dt_util.utcnow() - timedelta(days=HOURLY_MAX_DAYS)).timestamp()
+        self._samples = [s for s in self._samples + new if s.start >= oldest]
+        _LOGGER.info("Hourly model: learned %d new hours (%d in total)", len(new), len(self._samples))
+        return True
+
     # ------------------------------------------------------------------
     # Auto-training
     # ------------------------------------------------------------------
 
     async def _auto_train(self, daily_yields: dict[str, float]) -> bool:
         """Add new training entries for days not yet in history. Returns True if changed."""
+        if self._learn_from is not None:
+            cutoff = self._learn_from.isoformat()
+            daily_yields = {d: v for d, v in daily_yields.items() if d >= cutoff}
         if not daily_yields:
             return False
 
@@ -304,7 +450,9 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
 
         # 1. Fetch forecast
         try:
-            weather_data = await fetch_forecast(session, self._latitude, self._longitude)
+            weather_data = await fetch_forecast(
+                session, self._latitude, self._longitude, self._tilt, self._azimuth
+            )
         except aiohttp.ClientError as exc:
             raise UpdateFailed(f"Open-Meteo API error: {exc}") from exc
         except Exception as exc:
@@ -337,6 +485,26 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
                 "condition": bucket,
             })
 
+        # 5. Hourly series: each day's total spread by learned sun-position shape
+        try:
+            if await self._update_hourly_samples():
+                await self._save_hourly()
+        except Exception:  # noqa: BLE001 - the daily forecast must not fail over this
+            _LOGGER.warning("Hourly learning failed", exc_info=True)
+
+        tz = ZoneInfo(weather_data.get("timezone") or "UTC")
+        factors = learn_factors(
+            self._samples, self._latitude, self._longitude, dt_util.utcnow(), tz, self._learn_from
+        )
+        hourly = hourly_forecast(
+            weather_data.get("hourly", {}),
+            {date.fromisoformat(f["date"]): f["expected_kwh"] for f in forecasts},
+            factors,
+            self._latitude,
+            self._longitude,
+            tz,
+        )
+
         # Build compact history for sensor attributes
         training_history = []
         for e in self._history:
@@ -358,4 +526,27 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             "training_per_bucket": self.training_per_bucket,
             "training_history": training_history,
             "today_condition": forecasts[0]["condition"] if forecasts else "unknown",
+            "hourly": hourly,
+            "timezone": str(tz),
+            "hourly_learned_hours": len(self._samples),
+            "hourly_bins": len(factors),
+            "hourly_source": "tilted" if self._tilt is not None else "horizontal",
         }
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None

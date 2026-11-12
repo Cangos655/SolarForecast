@@ -11,18 +11,22 @@ from homeassistant import config_entries
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
+    CONF_AZIMUTH,
     CONF_CELL_TEMP_OFFSET,
     CONF_CITY,
     CONF_LATITUDE,
+    CONF_LEARN_FROM,
     CONF_LOCATION_MODE,
     CONF_LOCATION_NAME,
     CONF_LONGITUDE,
     CONF_SOLAR_SENSOR,
     CONF_TEMP_COEFFICIENT,
+    CONF_TILT,
     DEFAULT_CELL_TEMP_OFFSET,
     DEFAULT_TEMP_COEFFICIENT,
     DOMAIN,
@@ -97,7 +101,7 @@ class SolarForecastConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the Solar Forecast config flow."""
 
     VERSION = 1
-    MINOR_VERSION = 2
+    MINOR_VERSION = 3
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
@@ -222,11 +226,24 @@ class SolarForecastOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         energy_sensors = await _get_energy_sensors(self.hass)
 
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
         # Options override data – same merge as coordinator
         current = {**self._config_entry.data, **self._config_entry.options}
+
+        if user_input is not None:
+            has_tilt = user_input.get(CONF_TILT) is not None
+            has_azimuth = user_input.get(CONF_AZIMUTH) is not None
+            if has_tilt != has_azimuth:
+                errors["base"] = "orientation_incomplete"
+            else:
+                # Keep advanced values set earlier (not part of this form)
+                kept = {
+                    key: current[key]
+                    for key in (CONF_TEMP_COEFFICIENT, CONF_CELL_TEMP_OFFSET)
+                    if key in self._config_entry.options
+                }
+                cleaned = {k: v for k, v in user_input.items() if v not in (None, "")}
+                return self.async_create_entry(title="", data={**kept, **cleaned})
+
         current_sensor = current.get(CONF_SOLAR_SENSOR)
         default_sensor = (
             current_sensor
@@ -239,9 +256,31 @@ class SolarForecastOptionsFlow(config_entries.OptionsFlow):
             else vol.Required(CONF_SOLAR_SENSOR)
         )
 
-        schema = vol.Schema({sensor_marker: vol.In(energy_sensors)})
+        schema = vol.Schema(
+            {
+                sensor_marker: vol.In(energy_sensors),
+                vol.Optional(CONF_TILT): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=90, step=1, unit_of_measurement="°",
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Optional(CONF_AZIMUTH): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=359, step=1, unit_of_measurement="°",
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Optional(CONF_LEARN_FROM): selector.DateSelector(),
+            }
+        )
+        suggested = {
+            key: current[key]
+            for key in (CONF_TILT, CONF_AZIMUTH, CONF_LEARN_FROM)
+            if current.get(key) not in (None, "")
+        }
         return self.async_show_form(
             step_id="init",
-            data_schema=schema,
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
             errors=errors,
         )

@@ -48,27 +48,61 @@
     "step": {
       "init": {
         "title": "Solar Forecast Optionen",
+        "description": "Neigung und Ausrichtung sind freiwillig. Sind beide gesetzt, rechnet die Stundenprognose mit der Einstrahlung auf deine Module statt mit der waagerechten.",
         "data": {
           "solar_sensor": "Solar-Energiesensor",
           "temp_coefficient": "Temperaturkoeffizient (pro °C)",
-          "cell_temp_offset": "Zelltemperatur-Offset (°C über Lufttemperatur)"
+          "cell_temp_offset": "Zelltemperatur-Offset (°C über Lufttemperatur)",
+          "tilt": "Neigung der Module",
+          "azimuth": "Ausrichtung der Module",
+          "learn_from": "Lernen ab Datum"
+        },
+        "data_description": {
+          "tilt": "0° = waagerecht, 90° = senkrecht. Leer lassen, wenn unbekannt.",
+          "azimuth": "Himmelsrichtung der Module: 0° = Nord, 90° = Ost, 180° = Süd, 270° = West (wie bei Forecast.Solar). Leer lassen, wenn unbekannt.",
+          "learn_from": "Erträge vor diesem Datum werden nicht gelernt, z. B. nach dem Entfernen eines Schattens oder nach dem Erweitern der Anlage. Leer lassen, um alle Daten zu nutzen."
         }
       }
+    },
+    "error": {
+      "orientation_incomplete": "Bitte Neigung und Ausrichtung beide eintragen oder beide leer lassen."
     }
   },
   "entity": {
     "sensor": {
-      "today": {"name": "Solar Prognose Heute"},
-      "tomorrow": {"name": "Solar Prognose Morgen"},
-      "day_3": {"name": "Solar Prognose Tag 3"},
-      "day_4": {"name": "Solar Prognose Tag 4"},
-      "day_5": {"name": "Solar Prognose Tag 5"},
-      "day_6": {"name": "Solar Prognose Tag 6"},
-      "day_7": {"name": "Solar Prognose Tag 7"},
-      "day_8": {"name": "Solar Prognose Tag 8"},
-      "model_accuracy": {"name": "Solar Modell-Genauigkeit"},
-      "training_count": {"name": "Solar Trainingseinträge"},
-      "today_condition": {"name": "Solar Heutige Bedingung"}
+      "today": {
+        "name": "Solar Prognose Heute"
+      },
+      "tomorrow": {
+        "name": "Solar Prognose Morgen"
+      },
+      "day_3": {
+        "name": "Solar Prognose Tag 3"
+      },
+      "day_4": {
+        "name": "Solar Prognose Tag 4"
+      },
+      "day_5": {
+        "name": "Solar Prognose Tag 5"
+      },
+      "day_6": {
+        "name": "Solar Prognose Tag 6"
+      },
+      "day_7": {
+        "name": "Solar Prognose Tag 7"
+      },
+      "day_8": {
+        "name": "Solar Prognose Tag 8"
+      },
+      "model_accuracy": {
+        "name": "Solar Modell-Genauigkeit"
+      },
+      "training_count": {
+        "name": "Solar Trainingseinträge"
+      },
+      "today_condition": {
+        "name": "Solar Heutige Bedingung"
+      }
     }
   }
 }

@@ -48,12 +48,24 @@
     "step": {
       "init": {
         "title": "Solar Forecast Options",
+        "description": "Tilt and azimuth are optional. With both set, the hourly forecast uses the irradiance on your panels instead of the horizontal one.",
         "data": {
           "solar_sensor": "Solar energy sensor",
           "temp_coefficient": "Temperature coefficient (per °C)",
-          "cell_temp_offset": "Cell temperature offset (°C above air temp)"
+          "cell_temp_offset": "Cell temperature offset (°C above air temp)",
+          "tilt": "Panel tilt",
+          "azimuth": "Panel azimuth",
+          "learn_from": "Learn from date"
+        },
+        "data_description": {
+          "tilt": "0° = flat, 90° = vertical. Leave empty if unknown.",
+          "azimuth": "Direction the panels face: 0° = north, 90° = east, 180° = south, 270° = west (same as Forecast.Solar). Leave empty if unknown.",
+          "learn_from": "Yields before this date are ignored, e.g. after shade was removed or panels were added. Leave empty to use all data."
         }
       }
+    },
+    "error": {
+      "orientation_incomplete": "Please enter both tilt and azimuth, or leave both empty."
     }
   }
 }

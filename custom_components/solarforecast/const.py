@@ -2,7 +2,9 @@
 from datetime import timedelta
 
 DOMAIN = "solarforecast"
-UPDATE_INTERVAL = timedelta(hours=6)
+# Hourly, so the hourly series follows new weather runs during the day.
+# That is about 24-30 Open-Meteo requests per day, far below the free limit.
+UPDATE_INTERVAL = timedelta(hours=1)
 
 # Config entry keys
 CONF_SOLAR_SENSOR = "solar_sensor"
@@ -13,6 +15,9 @@ CONF_LONGITUDE = "longitude"
 CONF_LOCATION_NAME = "location_name"
 CONF_TEMP_COEFFICIENT = "temp_coefficient"
 CONF_CELL_TEMP_OFFSET = "cell_temp_offset"
+CONF_TILT = "tilt"              # panel tilt in degrees (0 = flat, 90 = vertical), optional
+CONF_AZIMUTH = "azimuth"        # 0 = north, 90 = east, 180 = south, 270 = west, optional
+CONF_LEARN_FROM = "learn_from"  # ignore yields before this date (YYYY-MM-DD), optional
 
 LOCATION_MODE_HOME = "home"
 LOCATION_MODE_CITY = "city"
@@ -48,6 +53,7 @@ WEIGHT_OLDEST = 1
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+OPEN_METEO_HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 
 FORECAST_DAYS = 8
 ARCHIVE_LOOKBACK_DAYS = 30
@@ -65,6 +71,11 @@ FORECAST_DAY_LABELS = [
     "day_7",
     "day_8",
 ]
+
+# Hourly model
+HOURLY_BOOTSTRAP_DAYS = 60    # hours learned from the recorder on first start
+HOURLY_MAX_DAYS = 400         # learned hours kept in storage
+HOURLY_SENSOR_TICK = timedelta(minutes=5)  # refresh of "now" based sensors
 
 # Sensor names
 SENSOR_TODAY = "today"

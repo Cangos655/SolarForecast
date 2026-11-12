@@ -11,10 +11,12 @@ A custom integration, available in the Home Assistant Marketplace and in HACS, t
 ## Features
 
 - **Solar yield forecast** (kWh per day, up to 8 days ahead)
+- **Hourly forecast** – the day's total spread over its hours, learned per sun position (shade from trees, houses or the horizon), with sensors for power now, the strongest hour and the best 2/3-hour window
+- **Energy Dashboard** – can be chosen as the solar production forecast, like Forecast.Solar
 - **Automatic ML training** – reads your actual solar production from the HA Energy Dashboard, no manual input needed
 - **Weather-bucketed learning** – separate efficiency curves for sunny, mixed, and overcast days
 - **Temperature compensation** – accounts for panel efficiency loss at high temperatures
-- **11 HA sensor entities** – usable in automations, dashboards, and Energy cards
+- **19 HA sensor entities** – usable in automations, dashboards, and Energy cards
 - **Built-in Lovelace card** – bundled with the integration and auto-registered as a frontend resource, no separate card install needed
 - **Fully configurable via HA UI** – no YAML needed
 
@@ -67,7 +69,18 @@ The entity IDs start with your location name, e.g. `sensor.home_solar_forecast_t
 | `…_solar_forecast_training_count` | — | Number of real training data points |
 | `…_solar_forecast_today_condition` | — | Weather bucket: sunny / mixed / overcast |
 
-Each forecast sensor includes attributes: `date`, `weather_code`, `radiation_mj_m2`, `temp_max_c`, `temp_min_c`, `condition`, `sunrise`, `sunset`.
+| `…_solar_forecast_power_now` | W | Expected power right now |
+| `…_solar_forecast_energy_current_hour` | kWh | Expected energy in the current clock hour |
+| `…_solar_forecast_energy_next_hour` | kWh | Expected energy in the next clock hour |
+| `…_solar_forecast_remaining_today` | kWh | Expected energy from now until midnight |
+| `…_solar_forecast_peak_time_today` / `_tomorrow` | time | Start of the strongest hour (attribute `energy_kwh`) |
+| `…_solar_forecast_best_2h_window` / `_best_3h_window` | time | Start of the best 2 or 3 hours still ahead today, else tomorrow – handy for the washing machine or dishwasher (attributes `end`, `energy_kwh`) |
+
+Each forecast sensor includes attributes: `date`, `weather_code`, `radiation_mj_m2`, `temp_max_c`, `temp_min_c`, `condition`, `sunrise`, `sunset`, and `hourly` (list of `{start, kwh}` for that day; not stored in the database).
+
+### Energy Dashboard
+
+Go to **Settings → Dashboards → Energy**, edit your solar production source and select this Solar Forecast entry under *Solar production forecast*. Pick only one forecast there: if you select several, Home Assistant adds their curves up.
 
 ## The Lovelace Card
 
@@ -117,9 +130,17 @@ Newer data is weighted 10× more than older data (linear weighting from 10 down 
 
 **Model accuracy** reflects training completeness, not prediction error: up to 90% from the number of real training days (of a 30-day cap), plus up to +10% bonus once all three weather buckets have real data.
 
+## How the Hourly Forecast Works
+
+1. Open-Meteo provides the irradiance for every hour. With **tilt and azimuth** set in the options (gear icon), it is the irradiance on your panels; without them, the horizontal irradiance.
+2. From your recorder's hourly statistics, the integration learns how your system really behaves at each **sun position** (15° of azimuth × elevation band), compared with the irradiance of the same hours. Shade is tied to the sun's position, so what is learned in one season carries over. Newer hours count more (half weight after 45 days); bins with little data lean towards the overall average. On first start the last 60 days are learned at once.
+3. The learned shape spreads each day's forecast total over its hours, so daily sensors, hourly sensors and the Energy Dashboard always show the same total.
+
+**Learn from date** (options): yields before this date are ignored – useful after shade was removed or the system was extended.
+
 ## Data Sources
 
-- **Weather forecast**: [Open-Meteo](https://open-meteo.com/) – free, no API key required
+- **Weather forecast**: [Open-Meteo](https://open-meteo.com/) – free, no API key required (about 25–30 requests per day, updated hourly)
 - **Solar production**: Your HA recorder / Energy Dashboard (local data, no cloud)
 
 ## History

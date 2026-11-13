@@ -247,3 +247,29 @@ async def test_old_hourly_store_is_relearned(recorder_mock, enable_custom_integr
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.data[DOMAIN][entry.entry_id]._samples == []
+
+
+async def test_offered_as_energy_forecast(recorder_mock, enable_custom_integrations, hass: HomeAssistant, no_frontend, aioclient_mock):
+    """The energy settings dialog lists only 'service' integrations as solar forecasts."""
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload())
+    aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
+    aioclient_mock.get("https://historical-forecast-api.open-meteo.com/v1/forecast", json={"hourly": {}})
+    hass.states.async_set(
+        "sensor.pv", "100", {"device_class": "energy", "state_class": "total_increasing", "unit_of_measurement": "kWh"}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN, version=1, minor_version=3, title="Home",
+        data={"latitude": 51.0, "longitude": 6.9, "solar_sensor": "sensor.pv", "location_name": "Home"},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # The frontend's solar settings dialog asks for config entries with
+    # type_filter ["service"]; other integration types are not listed there.
+    from homeassistant.components.energy.websocket_api import async_get_energy_platforms
+    from homeassistant.loader import async_get_integration
+
+    integration = await async_get_integration(hass, DOMAIN)
+    assert integration.integration_type == "service"
+    assert DOMAIN in await async_get_energy_platforms(hass)

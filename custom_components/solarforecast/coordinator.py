@@ -38,9 +38,13 @@ from .hourly import (
     Irradiance,
     Orientation,
     Sample,
+    apply_frozen,
+    day_hours,
     detect_orientation,
+    freeze_started_hours,
     hourly_forecast,
     learn_factors,
+    morning_due,
 )
 from .ml_engine import (
     TrainingEntry,
@@ -59,6 +63,8 @@ HOURLY_STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_hourly"
 # Learned hours keep global, direct and diffuse irradiance (format 2), so any
 # orientation can be computed from them without fetching again.
 HOURLY_FORMAT = 2
+# Frozen hours and the morning forecast, saved every update (small)
+LIVE_STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_live"
 
 # Bump this when the date attribution logic changes to force a clean retrain
 CURRENT_DATA_VERSION = 5
@@ -109,6 +115,18 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         )
         self._samples: list[Sample] = []
         self._hourly_checked: date | None = None
+
+        # Honest past: hours keep the value forecast before they began, and
+        # the day's forecast as it stood in the morning is kept (hourly.py)
+        self._live_store: Store = Store(
+            hass,
+            STORAGE_VERSION,
+            LIVE_STORAGE_KEY_TEMPLATE.format(entry_id=config_entry.entry_id),
+        )
+        self._frozen: dict[int, float] = {}
+        self._morning_day: date | None = None
+        self._morning_computed: int | None = None
+        self._morning_hours: dict[int, float] = {}
 
         super().__init__(
             hass,
@@ -223,6 +241,25 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             self._detected_orientation = Orientation(float(detected[0]), float(detected[1]))
         self._detected_on = _optional_date(stored.get("detected_on"))
         _LOGGER.debug("Loaded %d learned hours", len(self._samples))
+        await self._load_live()
+
+    async def _load_live(self) -> None:
+        stored = await self._live_store.async_load() or {}
+        self._frozen = {int(e): float(k) for e, k in (stored.get("frozen") or {}).items()}
+        morning = stored.get("morning") or {}
+        self._morning_day = _optional_date(morning.get("date"))
+        self._morning_computed = morning.get("computed")
+        self._morning_hours = {int(e): float(k) for e, k in (morning.get("hours") or {}).items()}
+
+    async def _save_live(self) -> None:
+        await self._live_store.async_save({
+            "frozen": {str(e): k for e, k in self._frozen.items()},
+            "morning": {
+                "date": self._morning_day.isoformat() if self._morning_day else None,
+                "computed": self._morning_computed,
+                "hours": {str(e): k for e, k in self._morning_hours.items()},
+            },
+        })
 
     async def _save_hourly(self) -> None:
         detected = self._detected_orientation
@@ -566,6 +603,22 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             orientation,
         )
 
+        # 6. Honest past: hours that have begun keep their earlier forecast,
+        #    and the morning forecast of the day is kept for comparisons
+        now = dt_util.utcnow()
+        self._frozen = freeze_started_hours(
+            (self.data or {}).get("hourly") or [], self._frozen, now.timestamp()
+        )
+        hourly = apply_frozen(hourly, self._frozen)
+        if morning_due(self._morning_day, now, tz):
+            self._morning_day = now.astimezone(tz).date()
+            self._morning_computed = int(now.timestamp())
+            self._morning_hours = day_hours(hourly, self._morning_day, tz)
+        try:
+            await self._save_live()
+        except Exception:  # noqa: BLE001 - the forecast must not fail over this
+            _LOGGER.warning("Could not save frozen hours", exc_info=True)
+
         # Build compact history for sensor attributes
         training_history = []
         for e in self._history:
@@ -591,6 +644,11 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             "timezone": str(tz),
             "hourly_learned_hours": len(self._samples),
             "hourly_bins": len(factors),
+            "morning": {
+                "date": self._morning_day.isoformat() if self._morning_day else None,
+                "computed": self._morning_computed,
+                "hours": sorted(self._morning_hours.items()),
+            },
             "hourly_source": self.orientation_source,
             "orientation": (
                 {"tilt": orientation.tilt, "azimuth": orientation.azimuth} if orientation else None

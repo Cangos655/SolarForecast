@@ -422,5 +422,46 @@ class SeriesReadingTest(unittest.TestCase):
         self.assertIn(start.hour, (10, 11))
 
 
+class FrozenHoursTest(unittest.TestCase):
+    day = date(2026, 11, 13)
+
+    def test_started_hours_keep_their_value(self):
+        nine, ten, eleven = (epoch(2026, 11, 13, h, BERLIN) for h in (9, 10, 11))
+        previous = [(nine, 1.0), (ten, 2.0), (eleven, 3.0)]
+        # Update at 10:07: 9 and 10 have begun, 11 not yet
+        frozen = hourly.freeze_started_hours(previous, {}, ten + 420)
+        self.assertEqual(frozen, {nine: 1.0, ten: 2.0})
+        newer = [(nine, 1.5), (ten, 2.5), (eleven, 3.5)]
+        self.assertEqual(hourly.apply_frozen(newer, frozen), [(nine, 1.0), (ten, 2.0), (eleven, 3.5)])
+
+    def test_frozen_value_is_not_overwritten(self):
+        ten = epoch(2026, 11, 13, 10, BERLIN)
+        frozen = hourly.freeze_started_hours([(ten, 2.0)], {}, ten + 60)
+        frozen = hourly.freeze_started_hours([(ten, 9.0)], frozen, ten + 3600)
+        self.assertEqual(frozen[ten], 2.0)
+
+    def test_old_frozen_hours_dropped(self):
+        old = epoch(2026, 11, 10, 10, BERLIN)
+        now = epoch(2026, 11, 13, 10, BERLIN)
+        self.assertEqual(hourly.freeze_started_hours([], {old: 1.0}, now), {})
+
+    def test_morning_due(self):
+        before = datetime(2026, 11, 13, 5, 59, tzinfo=BERLIN)
+        after = datetime(2026, 11, 13, 6, 7, tzinfo=BERLIN)
+        self.assertFalse(hourly.morning_due(None, before, BERLIN))
+        self.assertTrue(hourly.morning_due(None, after, BERLIN))
+        self.assertTrue(hourly.morning_due(date(2026, 11, 12), after, BERLIN))
+        self.assertFalse(hourly.morning_due(date(2026, 11, 13), after, BERLIN))
+
+    def test_day_hours(self):
+        series = hourly.hourly_forecast(
+            {**_day_irradiance(self.day), **_day_irradiance(self.day + timedelta(days=1))},
+            {self.day: 5.0, self.day + timedelta(days=1): 7.0}, {}, LAT, LON, BERLIN,
+        )
+        today = hourly.day_hours(series, self.day, BERLIN)
+        self.assertEqual(len(today), 24)
+        self.assertAlmostEqual(sum(today.values()), 5.0, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_time_change, async_track_time_interval
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -51,6 +51,7 @@ async def async_setup_entry(
     entities.append(SolarForecastPowerNowSensor(coordinator, entry))
     entities.append(SolarForecastHourEnergySensor(coordinator, entry, 0, "energy_current_hour", "Energy Current Hour"))
     entities.append(SolarForecastHourEnergySensor(coordinator, entry, 1, "energy_next_hour", "Energy Next Hour"))
+    entities.append(SolarForecastMorningHourSensor(coordinator, entry))
     entities.append(SolarForecastRemainingTodaySensor(coordinator, entry))
     entities.append(SolarForecastPeakTimeSensor(coordinator, entry, 0, "peak_time_today", "Peak Time Today"))
     entities.append(SolarForecastPeakTimeSensor(coordinator, entry, 1, "peak_time_tomorrow", "Peak Time Tomorrow"))
@@ -304,6 +305,53 @@ class SolarForecastHourEnergySensor(SolarForecastHourlyBaseSensor):
     def native_value(self) -> float | None:
         start = int(dt_util.utcnow().timestamp() // 3600 * 3600) + self._offset * 3600
         return round(energy_between(_series(self._data), start, start + 3600), 3)
+
+
+class SolarForecastMorningHourSensor(SolarForecastHourlyBaseSensor):
+    """This hour's energy as forecast in the morning (from 06:00 local).
+
+    Recorded as a measurement, so the recorder keeps it for good as an
+    hourly statistic: the honest forecast to compare with the real yield.
+    """
+
+    def __init__(self, coordinator: SolarForecastCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(
+            coordinator, entry, "energy_current_hour_morning", "Solar Forecast Current Hour Morning Forecast"
+        )
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_suggested_display_precision = 3
+        self._attr_icon = "mdi:weather-sunset-up"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # Switch exactly on the hour, so each hourly statistic holds one value
+        self.async_on_remove(
+            async_track_time_change(self.hass, self._async_tick, minute=0, second=0)
+        )
+
+    @property
+    def _morning(self) -> dict[str, Any]:
+        return self._data.get("morning") or {}
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._morning.get("date") == dt_util.now(_tz(self._data)).date().isoformat()
+
+    @property
+    def native_value(self) -> float | None:
+        start = int(dt_util.utcnow().timestamp() // 3600 * 3600)
+        hours = dict(self._morning.get("hours") or [])
+        return round(float(hours.get(start, 0.0)), 3)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        computed = self._morning.get("computed")
+        hours = self._morning.get("hours") or []
+        return {
+            "forecast_made": _iso(computed, _tz(self._data)) if computed else None,
+            "day_total_kwh": round(sum(k for _, k in hours), 2),
+        }
 
 
 class SolarForecastRemainingTodaySensor(SolarForecastHourlyBaseSensor):

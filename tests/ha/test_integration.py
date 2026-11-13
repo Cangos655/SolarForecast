@@ -31,7 +31,7 @@ def no_frontend(hass):
         yield
 
 
-def _forecast_payload() -> dict:
+def _forecast_payload(peak_hour: int = 12) -> dict:
     today = dt_util.now().astimezone(BERLIN).date()
     days = [today - timedelta(days=1) + timedelta(days=i) for i in range(9)]
     midnight = [int(datetime(d.year, d.month, d.day, tzinfo=BERLIN).timestamp()) for d in days]
@@ -40,7 +40,7 @@ def _forecast_payload() -> dict:
 
     def irr(t):
         h = datetime.fromtimestamp(t - 1800, BERLIN).hour
-        return max(0, 400 - 60 * abs(h - 12)) if 8 <= h <= 16 else 0
+        return max(0, 400 - 60 * abs(h - peak_hour)) if 8 <= h <= 16 else 0
 
     return {
         "timezone": "Europe/Berlin",
@@ -273,3 +273,50 @@ async def test_offered_as_energy_forecast(recorder_mock, enable_custom_integrati
     integration = await async_get_integration(hass, DOMAIN)
     assert integration.integration_type == "service"
     assert DOMAIN in await async_get_energy_platforms(hass)
+
+
+async def test_started_hours_frozen_and_morning_kept(recorder_mock, enable_custom_integrations, hass: HomeAssistant, no_frontend, aioclient_mock, freezer):
+    """A later forecast does not rewrite hours that have begun; the morning forecast stays."""
+    await hass.config.async_set_time_zone("Europe/Berlin")
+    freezer.move_to(datetime(2026, 11, 13, 9, 30, tzinfo=BERLIN))
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload(peak_hour=11))
+    aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
+    aioclient_mock.get("https://historical-forecast-api.open-meteo.com/v1/forecast", json={"hourly": {}})
+    hass.states.async_set(
+        "sensor.pv", "100", {"device_class": "energy", "state_class": "total_increasing", "unit_of_measurement": "kWh"}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN, version=1, minor_version=3, title="Home",
+        data={"latitude": 51.0, "longitude": 6.9, "solar_sensor": "sensor.pv", "location_name": "Home"},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    first = dict(coordinator.data["hourly"])
+    hour = {h: int(datetime(2026, 11, 13, h, tzinfo=BERLIN).timestamp()) for h in range(24)}
+    assert coordinator.data["morning"]["date"] == "2026-11-13"
+
+    # One hour later the weather forecast moved the peak into the afternoon
+    freezer.move_to(datetime(2026, 11, 13, 10, 30, tzinfo=BERLIN))
+    aioclient_mock.clear_requests()
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload(peak_hour=14))
+    aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
+    aioclient_mock.get("https://historical-forecast-api.open-meteo.com/v1/forecast", json={"hourly": {}})
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    second = dict(coordinator.data["hourly"])
+
+    # 9:00 and 10:00 had begun: they keep the first forecast; 11:00 and later follow the new one
+    assert second[hour[9]] == first[hour[9]]
+    assert second[hour[10]] == first[hour[10]]
+    assert second[hour[14]] > first[hour[14]]
+    assert second[hour[11]] != first[hour[11]]
+
+    # The morning forecast of this hour, recorded as a measurement
+    states = {s.entity_id: s for s in hass.states.async_all("sensor")}
+    morning = [s for e, s in states.items() if e.endswith("current_hour_morning_forecast")][0]
+    assert float(morning.state) == pytest.approx(round(first[hour[10]], 3))
+    assert morning.attributes["state_class"] == "measurement"
+    current = [s for e, s in states.items() if e.endswith("energy_current_hour")][0]
+    assert float(current.state) == pytest.approx(round(first[hour[10]], 3))

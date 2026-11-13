@@ -17,7 +17,7 @@ A custom integration, available in the Home Assistant Marketplace and in HACS, t
 - **Automatic ML training** – reads your actual solar production from the HA Energy Dashboard, no manual input needed
 - **Weather-bucketed learning** – separate efficiency curves for sunny, mixed, and overcast days
 - **Temperature compensation** – accounts for panel efficiency loss at high temperatures
-- **19 HA sensor entities** – usable in automations, dashboards, and Energy cards
+- **20 HA sensor entities** – usable in automations, dashboards, and Energy cards
 - **Built-in Lovelace card** – bundled with the integration and auto-registered as a frontend resource, no separate card install needed
 - **Fully configurable via HA UI** – no YAML needed
 
@@ -73,6 +73,7 @@ The entity IDs start with your location name, e.g. `sensor.home_solar_forecast_t
 | `…_solar_forecast_power_now` | W | Expected power right now |
 | `…_solar_forecast_energy_current_hour` | kWh | Expected energy in the current clock hour |
 | `…_solar_forecast_energy_next_hour` | kWh | Expected energy in the next clock hour |
+| `…_solar_forecast_current_hour_morning_forecast` | kWh | This hour's energy as forecast in the morning (from 06:00). Kept as a long-term statistic, to compare with your real yield |
 | `…_solar_forecast_remaining_today` | kWh | Expected energy from now until midnight |
 | `…_solar_forecast_peak_time_today` / `_tomorrow` | time | Start of the strongest hour (attribute `energy_kwh`) |
 | `…_solar_forecast_best_2h_window` / `_best_3h_window` | time | Start of the best 2 or 3 hours still ahead today, else tomorrow – handy for the washing machine or dishwasher (attributes `end`, `energy_kwh`) |
@@ -138,7 +139,8 @@ Newer data is weighted 10× more than older data (linear weighting from 10 down 
    - **Tilt and azimuth** in the options (gear icon) are optional and override the detection.
    - The `Power Now` sensor shows the orientation in use (`orientation_source`: detected, manual or horizontal; `tilt`, `azimuth`).
 2. From your recorder's hourly statistics, the integration learns how your system really behaves at each **sun position** (15° of azimuth × elevation band), compared with the irradiance of the same hours. Shade is tied to the sun's position, so what is learned in one season carries over. Newer hours count more (half weight after 45 days); bins with little data lean towards the overall average. On first start the last 60 days are learned at once.
-3. The learned shape spreads each day's forecast total over its hours, so daily sensors, hourly sensors and the Energy Dashboard always show the same total.
+3. The learned shape spreads each day's forecast total over its hours.
+4. **Honest past:** the forecast is updated every hour, but an hour that has begun keeps the value it was forecast with before it began. The Energy Dashboard therefore shows how good the forecast really was, not a curve redrawn afterwards. The daily sensors always show the newest forecast for the whole day, so during the day they can differ from the sum of the hours.
 
 **Learn from date** (options): yields before this date are ignored – useful after shade was removed or the system was extended.
 

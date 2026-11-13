@@ -414,3 +414,45 @@ def best_window(
         if best is None or energy > best[1] + 1e-9:
             best = (start, round(energy, 3))
     return best
+
+
+# ---------------------------------------------------------------------------
+# Honest past: frozen hours and the morning forecast
+# ---------------------------------------------------------------------------
+
+MORNING_HOUR = 6         # local hour from which the day's morning forecast is kept
+FROZEN_KEEP_HOURS = 48   # frozen hours older than this are dropped
+
+
+def freeze_started_hours(
+    previous: list[tuple[int, float]],
+    frozen: dict[int, float],
+    now: float,
+) -> dict[int, float]:
+    """Keep the forecast of hours that have begun.
+
+    ``previous`` is the series of the last update, calculated before ``now``.
+    Every hour that has begun since keeps the value it had then, so a later
+    forecast cannot rewrite it. Hours already frozen stay unchanged.
+    """
+    result = {e: k for e, k in frozen.items() if e >= now - FROZEN_KEEP_HOURS * 3600}
+    for epoch, kwh in previous:
+        if epoch <= now and epoch not in result:
+            result[epoch] = kwh
+    return result
+
+
+def apply_frozen(series: list[tuple[int, float]], frozen: dict[int, float]) -> list[tuple[int, float]]:
+    """The series with frozen hours put back to the value they were forecast with."""
+    return [(epoch, frozen.get(epoch, kwh)) for epoch, kwh in series]
+
+
+def morning_due(morning_day: date | None, now: datetime, tz: tzinfo) -> bool:
+    """True when today's morning forecast has not been kept yet and it is time."""
+    local = now.astimezone(tz)
+    return morning_day != local.date() and local.hour >= MORNING_HOUR
+
+
+def day_hours(series: list[tuple[int, float]], day: date, tz: tzinfo) -> dict[int, float]:
+    """Hours of one local day from a series."""
+    return {e: k for e, k in series if local_date(e, tz) == day}

@@ -270,6 +270,17 @@ class SolarForecastPowerNowSensor(SolarForecastHourlyBaseSensor):
     def native_value(self) -> int | None:
         return round(power_at(_series(self._data), dt_util.utcnow().timestamp()))
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Which orientation shapes the hours: set in the options, detected, or horizontal."""
+        orientation = self._data.get("orientation") or {}
+        return {
+            "orientation_source": self._data.get("hourly_source"),
+            "tilt": orientation.get("tilt"),
+            "azimuth": orientation.get("azimuth"),
+            "learned_hours": self._data.get("hourly_learned_hours"),
+        }
+
 
 class SolarForecastHourEnergySensor(SolarForecastHourlyBaseSensor):
     """Expected energy in the current or the next clock hour."""

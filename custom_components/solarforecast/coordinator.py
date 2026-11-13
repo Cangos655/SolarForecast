@@ -34,7 +34,14 @@ from .const import (
     MIN_YIELD_KWH,
     UPDATE_INTERVAL,
 )
-from .hourly import Sample, hourly_forecast, learn_factors
+from .hourly import (
+    Irradiance,
+    Orientation,
+    Sample,
+    detect_orientation,
+    hourly_forecast,
+    learn_factors,
+)
 from .ml_engine import (
     TrainingEntry,
     calculate_expected_yield,
@@ -49,6 +56,9 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_VERSION = 1
 STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_history"
 HOURLY_STORAGE_KEY_TEMPLATE = f"{DOMAIN}_{{entry_id}}_hourly"
+# Learned hours keep global, direct and diffuse irradiance (format 2), so any
+# orientation can be computed from them without fetching again.
+HOURLY_FORMAT = 2
 
 # Bump this when the date attribution logic changes to force a clean retrain
 CURRENT_DATA_VERSION = 5
@@ -74,10 +84,14 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         self._solar_sensor: str = cfg[CONF_SOLAR_SENSOR]
         self._temp_coefficient: float = cfg.get(CONF_TEMP_COEFFICIENT, DEFAULT_TEMP_COEFFICIENT)
         self._cell_temp_offset: int = cfg.get(CONF_CELL_TEMP_OFFSET, DEFAULT_CELL_TEMP_OFFSET)
-        self._tilt: float | None = _optional_float(cfg.get(CONF_TILT))
-        self._azimuth: float | None = _optional_float(cfg.get(CONF_AZIMUTH))
-        if self._tilt is None or self._azimuth is None:
-            self._tilt = self._azimuth = None  # tilted irradiance needs both
+        tilt = _optional_float(cfg.get(CONF_TILT))
+        azimuth = _optional_float(cfg.get(CONF_AZIMUTH))
+        # Set in the options it wins; otherwise the orientation is detected
+        self._manual_orientation: Orientation | None = (
+            Orientation(tilt, azimuth) if tilt is not None and azimuth is not None else None
+        )
+        self._detected_orientation: Orientation | None = None
+        self._detected_on: date | None = None
         self._learn_from: date | None = _optional_date(cfg.get(CONF_LEARN_FROM))
 
         self._store: Store = Store(
@@ -131,11 +145,17 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         return get_model_accuracy(self._history)
 
     @property
-    def orientation_signature(self) -> str:
-        """Which irradiance the hourly samples were learned against."""
-        if self._tilt is None:
-            return "horizontal"
-        return f"{self._tilt:g}/{self._azimuth:g}"
+    def orientation(self) -> Orientation | None:
+        """Orientation used for the hourly shape, None for horizontal."""
+        return self._manual_orientation or self._detected_orientation
+
+    @property
+    def orientation_source(self) -> str:
+        if self._manual_orientation is not None:
+            return "manual"
+        if self._detected_orientation is not None:
+            return "detected"
+        return "horizontal"
 
     # ------------------------------------------------------------------
     # Storage
@@ -189,18 +209,31 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
 
     async def _load_hourly(self) -> None:
         stored = await self._hourly_store.async_load()
-        if not stored or stored.get("orientation") != self.orientation_signature:
-            # New install, or tilt/azimuth changed: the stored irradiance no
-            # longer fits, learn again from the recorder.
+        if not stored or stored.get("format") != HOURLY_FORMAT:
+            # New install, or hours stored by 1.1.0b1 (irradiance of one
+            # orientation only): learn again from the recorder.
             self._samples = []
             return
-        self._samples = [Sample(int(t), float(e), float(i)) for t, e, i in stored.get("samples", [])]
+        self._samples = [
+            Sample(int(t), float(e), Irradiance(float(g), float(b), float(d)))
+            for t, e, g, b, d in stored.get("samples", [])
+        ]
+        detected = stored.get("detected")
+        if detected:
+            self._detected_orientation = Orientation(float(detected[0]), float(detected[1]))
+        self._detected_on = _optional_date(stored.get("detected_on"))
         _LOGGER.debug("Loaded %d learned hours", len(self._samples))
 
     async def _save_hourly(self) -> None:
+        detected = self._detected_orientation
         await self._hourly_store.async_save({
-            "orientation": self.orientation_signature,
-            "samples": [[s.start, round(s.energy_kwh, 4), round(s.irradiance, 1)] for s in self._samples],
+            "format": HOURLY_FORMAT,
+            "samples": [
+                [s.start, round(s.energy_kwh, 4), *(round(v, 1) for v in s.irradiance)]
+                for s in self._samples
+            ],
+            "detected": [detected.tilt, detected.azimuth] if detected else None,
+            "detected_on": self._detected_on.isoformat() if self._detected_on else None,
         })
 
     # ------------------------------------------------------------------
@@ -347,8 +380,6 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             self._longitude,
             (first_day - timedelta(days=1)).isoformat(),
             yesterday.isoformat(),
-            self._tilt,
-            self._azimuth,
         )
         if not irradiance:
             return False
@@ -361,7 +392,7 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             if epoch in irradiance
             and epoch not in known
             and start_epoch <= epoch < end_epoch
-            and (irradiance[epoch] > 0 or yields[epoch] > 0)
+            and (irradiance[epoch].ghi > 0 or yields[epoch] > 0)
         ]
         self._hourly_checked = today
         if not new:
@@ -370,6 +401,34 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
         oldest = (dt_util.utcnow() - timedelta(days=HOURLY_MAX_DAYS)).timestamp()
         self._samples = [s for s in self._samples + new if s.start >= oldest]
         _LOGGER.info("Hourly model: learned %d new hours (%d in total)", len(new), len(self._samples))
+        return True
+
+    async def _update_detection(self, tz: ZoneInfo) -> bool:
+        """Detect the orientation once a day from the learned hours.
+
+        Runs on the recent days only, so the result follows the season
+        (and with it the shade of trees or houses). Returns True when the
+        stored state changed.
+        """
+        today = dt_util.now().date()
+        if self._manual_orientation is not None or self._detected_on == today or not self._samples:
+            return False
+        found = await self.hass.async_add_executor_job(
+            detect_orientation,
+            list(self._samples),
+            self._latitude,
+            self._longitude,
+            dt_util.utcnow(),
+            tz,
+            self._learn_from,
+        )
+        if found != self._detected_orientation:
+            if found is None:
+                _LOGGER.info("Hourly model: not enough data to detect the orientation, using horizontal")
+            else:
+                _LOGGER.info("Hourly model: detected orientation %g° tilt, %g° azimuth", found.tilt, found.azimuth)
+        self._detected_orientation = found
+        self._detected_on = today
         return True
 
     # ------------------------------------------------------------------
@@ -450,9 +509,7 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
 
         # 1. Fetch forecast
         try:
-            weather_data = await fetch_forecast(
-                session, self._latitude, self._longitude, self._tilt, self._azimuth
-            )
+            weather_data = await fetch_forecast(session, self._latitude, self._longitude)
         except aiohttp.ClientError as exc:
             raise UpdateFailed(f"Open-Meteo API error: {exc}") from exc
         except Exception as exc:
@@ -486,15 +543,18 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             })
 
         # 5. Hourly series: each day's total spread by learned sun-position shape
+        tz = ZoneInfo(weather_data.get("timezone") or "UTC")
         try:
-            if await self._update_hourly_samples():
+            changed = await self._update_hourly_samples()
+            changed = await self._update_detection(tz) or changed
+            if changed:
                 await self._save_hourly()
         except Exception:  # noqa: BLE001 - the daily forecast must not fail over this
             _LOGGER.warning("Hourly learning failed", exc_info=True)
 
-        tz = ZoneInfo(weather_data.get("timezone") or "UTC")
+        orientation = self.orientation
         factors = learn_factors(
-            self._samples, self._latitude, self._longitude, dt_util.utcnow(), tz, self._learn_from
+            self._samples, self._latitude, self._longitude, dt_util.utcnow(), tz, self._learn_from, orientation
         )
         hourly = hourly_forecast(
             weather_data.get("hourly", {}),
@@ -503,6 +563,7 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             self._latitude,
             self._longitude,
             tz,
+            orientation,
         )
 
         # Build compact history for sensor attributes
@@ -530,7 +591,10 @@ class SolarForecastCoordinator(DataUpdateCoordinator):
             "timezone": str(tz),
             "hourly_learned_hours": len(self._samples),
             "hourly_bins": len(factors),
-            "hourly_source": "tilted" if self._tilt is not None else "horizontal",
+            "hourly_source": self.orientation_source,
+            "orientation": (
+                {"tilt": orientation.tilt, "azimuth": orientation.azimuth} if orientation else None
+            ),
         }
 
 

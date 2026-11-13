@@ -17,7 +17,7 @@ from .const import (
     OPEN_METEO_GEOCODING_URL,
     OPEN_METEO_HISTORICAL_FORECAST_URL,
 )
-from .hourly import hours_from_open_meteo
+from .hourly import Irradiance, hours_from_open_meteo
 from .ml_engine import ForecastDay
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,34 +63,24 @@ def _parse_day(daily: dict[str, Any], index: int, tz: ZoneInfo | None = None) ->
     }
 
 
-def orientation_params(tilt: float | None, azimuth: float | None) -> dict[str, Any]:
-    """Open-Meteo parameters for tilted irradiance, empty without orientation.
-
-    The integration stores the azimuth like Forecast.Solar in Home Assistant
-    (0 = north, 90 = east, 180 = south, 270 = west); Open-Meteo counts from
-    south (0 = south, -90 = east, 90 = west).
-    """
-    if tilt is None or azimuth is None:
-        return {}
-    om_azimuth = ((float(azimuth) - 180 + 180) % 360) - 180
-    return {"tilt": float(tilt), "azimuth": om_azimuth}
+HOURLY_FIELDS = "shortwave_radiation,direct_normal_irradiance,diffuse_radiation"
 
 
-def _hourly_field(tilt: float | None, azimuth: float | None) -> str:
-    return "global_tilted_irradiance" if orientation_params(tilt, azimuth) else "shortwave_radiation"
-
-
-def _parse_hourly(data: dict[str, Any], field: str) -> dict[int, float]:
+def _parse_hourly(data: dict[str, Any]) -> dict[int, Irradiance]:
     hourly = data.get("hourly") or {}
-    return hours_from_open_meteo(hourly.get("time") or [], hourly.get(field) or [])
+    times = hourly.get("time") or []
+    return hours_from_open_meteo(
+        times,
+        hourly.get("shortwave_radiation") or [],
+        hourly.get("direct_normal_irradiance") or [None] * len(times),
+        hourly.get("diffuse_radiation") or [None] * len(times),
+    )
 
 
 async def fetch_forecast(
     session: aiohttp.ClientSession,
     latitude: float,
     longitude: float,
-    tilt: float | None = None,
-    azimuth: float | None = None,
 ) -> dict[str, Any]:
     """Fetch current forecast (8 days) + yesterday from Open-Meteo.
 
@@ -100,31 +90,29 @@ async def fetch_forecast(
         {
             "yesterday": ForecastDay,
             "forecast": [ForecastDay, ...],   # today + 7 days
-            "hourly": {hour start epoch: Wh/m²},
+            "hourly": {hour start epoch: Irradiance},
             "timezone": "Europe/Berlin",      # time zone of the location
         }
     """
-    field = _hourly_field(tilt, azimuth)
     params = {
         "latitude": latitude,
         "longitude": longitude,
         "daily": _DAILY_PARAMS,
-        "hourly": field,
+        "hourly": HOURLY_FIELDS,
         "timezone": "auto",
         "timeformat": "unixtime",
         "past_days": 1,
         "forecast_days": FORECAST_DAYS,
-        **orientation_params(tilt, azimuth),
     }
 
     async with session.get(OPEN_METEO_FORECAST_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
         resp.raise_for_status()
         data = await resp.json()
 
-    return parse_forecast_response(data, field)
+    return parse_forecast_response(data)
 
 
-def parse_forecast_response(data: dict[str, Any], field: str) -> dict[str, Any]:
+def parse_forecast_response(data: dict[str, Any]) -> dict[str, Any]:
     """Parse a ``timeformat=unixtime`` forecast response."""
     tz_name = data.get("timezone") or "UTC"
     tz = ZoneInfo(tz_name)
@@ -140,7 +128,7 @@ def parse_forecast_response(data: dict[str, Any], field: str) -> dict[str, Any]:
     return {
         "yesterday": yesterday,
         "forecast": forecast,
-        "hourly": _parse_hourly(data, field),
+        "hourly": _parse_hourly(data),
         "timezone": tz_name,
     }
 
@@ -151,26 +139,22 @@ async def fetch_hourly_history(
     longitude: float,
     start_date: str,
     end_date: str,
-    tilt: float | None = None,
-    azimuth: float | None = None,
-) -> dict[int, float]:
-    """Hourly irradiance of past days for learning, {hour start epoch: Wh/m²}.
+) -> dict[int, Irradiance]:
+    """Hourly irradiance of past days for learning, {hour start epoch: Irradiance}.
 
     Uses the Historical Forecast API (stored forecasts, so the learned
     factors match what the live forecast will deliver). Requested in UTC so
     the hours line up with the recorder's hourly statistics everywhere,
     including time zones with half-hour offsets.
     """
-    field = _hourly_field(tilt, azimuth)
     params = {
         "latitude": latitude,
         "longitude": longitude,
-        "hourly": field,
+        "hourly": HOURLY_FIELDS,
         "start_date": start_date,
         "end_date": end_date,
         "timezone": "GMT",
         "timeformat": "unixtime",
-        **orientation_params(tilt, azimuth),
     }
     try:
         async with session.get(
@@ -181,7 +165,7 @@ async def fetch_hourly_history(
     except Exception as exc:  # noqa: BLE001 - learning is best effort
         _LOGGER.warning("Could not fetch hourly history %s–%s: %s", start_date, end_date, exc)
         return {}
-    return _parse_hourly(data, field)
+    return _parse_hourly(data)
 
 
 async def fetch_historical_day(

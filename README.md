@@ -12,6 +12,7 @@ A custom integration, available in the Home Assistant Marketplace and in HACS, t
 
 - **Solar yield forecast** (kWh per day, up to 8 days ahead)
 - **Hourly forecast** – the day's total spread over its hours, learned per sun position (shade from trees, houses or the horizon), with sensors for power now, the strongest hour and the best 2/3-hour window
+- **No roof data needed** – the orientation of your panels is detected from your own hourly yields
 - **Energy Dashboard** – can be chosen as the solar production forecast, like Forecast.Solar
 - **Automatic ML training** – reads your actual solar production from the HA Energy Dashboard, no manual input needed
 - **Weather-bucketed learning** – separate efficiency curves for sunny, mixed, and overcast days
@@ -132,7 +133,10 @@ Newer data is weighted 10× more than older data (linear weighting from 10 down 
 
 ## How the Hourly Forecast Works
 
-1. Open-Meteo provides the irradiance for every hour. With **tilt and azimuth** set in the options (gear icon), it is the irradiance on your panels; without them, the horizontal irradiance.
+1. Open-Meteo provides the global, direct and diffuse irradiance for every hour. The integration computes the irradiance on your panels from them.
+   - **Orientation is detected automatically.** Once a day the integration tries tilts from 0–70° and directions from east over south to west and keeps the one whose daily shape fits your own hourly yields of the last 60 days best. Shade shifts the result: a roof with shade in the afternoon is detected as facing further east. That is intended, it is the orientation your system *behaves* like. With fewer than 10 days of usable data, or when no orientation fits clearly better, the horizontal irradiance is used.
+   - **Tilt and azimuth** in the options (gear icon) are optional and override the detection.
+   - The `Power Now` sensor shows the orientation in use (`orientation_source`: detected, manual or horizontal; `tilt`, `azimuth`).
 2. From your recorder's hourly statistics, the integration learns how your system really behaves at each **sun position** (15° of azimuth × elevation band), compared with the irradiance of the same hours. Shade is tied to the sun's position, so what is learned in one season carries over. Newer hours count more (half weight after 45 days); bins with little data lean towards the overall average. On first start the last 60 days are learned at once.
 3. The learned shape spreads each day's forecast total over its hours, so daily sensors, hourly sensors and the Energy Dashboard always show the same total.
 

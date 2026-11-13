@@ -17,6 +17,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.solarforecast import energy
 from custom_components.solarforecast.const import DOMAIN
+from custom_components.solarforecast.hourly import Irradiance
+from custom_components.solarforecast.weather_api import HOURLY_FIELDS
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -29,13 +31,12 @@ def no_frontend(hass):
         yield
 
 
-def _forecast_payload(tilted: bool) -> dict:
+def _forecast_payload() -> dict:
     today = dt_util.now().astimezone(BERLIN).date()
     days = [today - timedelta(days=1) + timedelta(days=i) for i in range(9)]
     midnight = [int(datetime(d.year, d.month, d.day, tzinfo=BERLIN).timestamp()) for d in days]
     first = midnight[0]
     hours = [first + 3600 * (i + 1) for i in range(24 * 9)]
-    field = "global_tilted_irradiance" if tilted else "shortwave_radiation"
 
     def irr(t):
         h = datetime.fromtimestamp(t - 1800, BERLIN).hour
@@ -54,14 +55,19 @@ def _forecast_payload(tilted: bool) -> dict:
             "sunrise": [m + 7 * 3600 for m in midnight],
             "sunset": [m + 17 * 3600 for m in midnight],
         },
-        "hourly": {"time": hours, field: [irr(t) for t in hours]},
+        "hourly": {
+            "time": hours,
+            "shortwave_radiation": [irr(t) for t in hours],
+            "direct_normal_irradiance": [irr(t) * 1.5 for t in hours],
+            "diffuse_radiation": [irr(t) * 0.3 for t in hours],
+        },
     }
 
 
 @pytest.mark.parametrize("tilted", [False, True])
 async def test_setup_sensors_and_energy(recorder_mock, enable_custom_integrations, hass: HomeAssistant, no_frontend, aioclient_mock, tilted):
     await hass.config.async_set_time_zone("Europe/Berlin")
-    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload(tilted))
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload())
     aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
     aioclient_mock.get("https://historical-forecast-api.open-meteo.com/v1/forecast", json={"hourly": {}})
 
@@ -85,11 +91,9 @@ async def test_setup_sensors_and_energy(recorder_mock, enable_custom_integration
     sent = [call for call in aioclient_mock.mock_calls if "api.open-meteo.com" in str(call[1])]
     params = sent[0][1].query
     assert params["timeformat"] == "unixtime"
-    if tilted:
-        assert params["tilt"] == "46.0" and params["azimuth"] == "-30.0"
-        assert params["hourly"] == "global_tilted_irradiance"
-    else:
-        assert "tilt" not in params and params["hourly"] == "shortwave_radiation"
+    # The orientation is applied locally, Open-Meteo always gets the same request
+    assert params["hourly"] == HOURLY_FIELDS
+    assert "tilt" not in params and "azimuth" not in params
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
     series = coordinator.data["hourly"]
@@ -117,11 +121,20 @@ async def test_setup_sensors_and_energy(recorder_mock, enable_custom_integration
     today_sensor = [s for e, s in states.items() if e.endswith("solar_forecast_today")][0]
     assert today_sensor.attributes["hourly"]
     peak = [s for e, s in states.items() if e.endswith("peak_time_tomorrow")][0]
-    assert datetime.fromisoformat(peak.state).astimezone(BERLIN).hour == 12
+    assert datetime.fromisoformat(peak.state).astimezone(BERLIN).hour in ((11, 12) if tilted else (12,))
+
+    # No learned hours yet: manual orientation if set, horizontal otherwise
+    power = [s for e, s in states.items() if e.endswith("power_now")][0]
+    if tilted:
+        assert power.attributes["orientation_source"] == "manual"
+        assert (power.attributes["tilt"], power.attributes["azimuth"]) == (46, 150)
+    else:
+        assert power.attributes["orientation_source"] == "horizontal"
+        assert power.attributes["tilt"] is None
 
 
 async def test_options_flow_orientation(recorder_mock, enable_custom_integrations, hass: HomeAssistant, no_frontend, aioclient_mock):
-    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload(False))
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload())
     aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
     aioclient_mock.get("https://historical-forecast-api.open-meteo.com/v1/forecast", json={"hourly": {}})
     hass.states.async_set(
@@ -178,9 +191,14 @@ async def test_hourly_learning_from_recorder(recorder_mock, enable_custom_integr
     hist_vals = [300 if 8 <= r["start"].astimezone(BERLIN).hour < 16 else 0 for r in rows]
     aioclient_mock.get(
         "https://historical-forecast-api.open-meteo.com/v1/forecast",
-        json={"hourly": {"time": hist_times, "shortwave_radiation": hist_vals}},
+        json={"hourly": {
+            "time": hist_times,
+            "shortwave_radiation": hist_vals,
+            "direct_normal_irradiance": [v * 2 for v in hist_vals],
+            "diffuse_radiation": [v / 3 for v in hist_vals],
+        }},
     )
-    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload(False))
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload())
     aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
     hass.states.async_set(
         "sensor.pv", str(total), {"device_class": "energy", "state_class": "total_increasing", "unit_of_measurement": "kWh"}
@@ -199,7 +217,33 @@ async def test_hourly_learning_from_recorder(recorder_mock, enable_custom_integr
     for sample in learned:
         assert 8 <= datetime.fromtimestamp(sample.start, BERLIN).hour < 16
         assert sample.energy_kwh == pytest.approx(1.0)
-        assert sample.irradiance == 300
+        assert sample.irradiance == Irradiance(300, 600, 100)
     hist_calls = [c for c in aioclient_mock.mock_calls if "historical-forecast" in str(c[1])]
     assert hist_calls[0][1].query["timezone"] == "GMT"
+    assert hist_calls[0][1].query["hourly"] == HOURLY_FIELDS
     assert coordinator.data["hourly_learned_hours"] == 40
+    # Five days are too few to detect an orientation: horizontal, checked today
+    assert coordinator.data["hourly_source"] == "horizontal"
+    assert coordinator._detected_on == dt_util.now().date()
+
+
+async def test_old_hourly_store_is_relearned(recorder_mock, enable_custom_integrations, hass: HomeAssistant, no_frontend, aioclient_mock, hass_storage):
+    """Hours stored by 1.1.0b1 (one irradiance value) are dropped and learned again."""
+    aioclient_mock.get("https://api.open-meteo.com/v1/forecast", json=_forecast_payload())
+    aioclient_mock.get("https://archive-api.open-meteo.com/v1/archive", json={"daily": {"time": []}})
+    aioclient_mock.get("https://historical-forecast-api.open-meteo.com/v1/forecast", json={"hourly": {}})
+    hass.states.async_set(
+        "sensor.pv", "100", {"device_class": "energy", "state_class": "total_increasing", "unit_of_measurement": "kWh"}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN, version=1, minor_version=3, title="Home",
+        data={"latitude": 51.0, "longitude": 6.9, "solar_sensor": "sensor.pv", "location_name": "Home"},
+    )
+    hass_storage[f"{DOMAIN}_{entry.entry_id}_hourly"] = {
+        "version": 1, "minor_version": 1, "key": f"{DOMAIN}_{entry.entry_id}_hourly",
+        "data": {"orientation": "46/150", "samples": [[1792476000, 0.12, 50.0]]},
+    }
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN][entry.entry_id]._samples == []

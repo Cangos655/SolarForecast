@@ -6,8 +6,12 @@ identified by its START, matching the Home Assistant recorder and energy
 dashboard.
 
 How the hourly forecast is built:
-  1. Open-Meteo gives, per hour, the irradiance on the panels (tilted
-     irradiance when tilt and azimuth are configured, horizontal otherwise).
+  1. Open-Meteo gives, per hour, global, direct and diffuse irradiance. The
+     irradiance on the panels is computed from them for an orientation:
+     the one set in the options, or else the one that fits the system's own
+     hourly yields best (``detect_orientation``). The detected orientation
+     is an effective one: shade from a tree or a house shifts it, which is
+     what the forecast needs.
   2. A correction factor is learned per sun-position bin from real hourly
      yields (recorder) against the irradiance of the same hours. Shade from
      a tree, a house or the horizon is tied to the sun's position, so a bin
@@ -20,9 +24,10 @@ How the hourly forecast is built:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 from .solar_position import sun_position
 
@@ -39,6 +44,40 @@ MIN_SAMPLE_IRRADIANCE = 20   # Wh/m² – darker hours carry no shape informatio
 MIN_DAY_YIELD_KWH = 0.5      # days below this (outage, snow) are not learned
 FACTOR_LIMITS = (0.2, 3.0)   # relative factor clamp, protects against odd data
 
+# Orientation detection
+GROUND_ALBEDO = 0.2
+DETECT_WINDOW_DAYS = 60       # recent days only, so the result follows the season
+DETECT_MIN_DAYS = 10          # days with enough yield before a result is trusted
+DETECT_MIN_DAY_KWH = 1.0
+DETECT_MIN_GAIN = 0.03        # must fit at least 3 % better than horizontal
+DETECT_TILTS = range(0, 75, 5)
+DETECT_AZIMUTH_STEP = 10
+
+
+def detect_azimuths(latitude: float) -> list[int]:
+    """Azimuths searched: the half facing the equator, east to west.
+
+    A wider search fits the shade of the training days too closely (in a
+    test on real data it gave a north-east plane that forecast worse).
+    """
+    first = 90 if latitude >= 0 else 270
+    return [(first + step) % 360 for step in range(0, 181, DETECT_AZIMUTH_STEP)]
+
+
+class Irradiance(NamedTuple):
+    """Irradiance of one hour in Wh/m² (= mean W/m² over the hour)."""
+
+    ghi: float  # global horizontal
+    dni: float  # direct normal
+    dhi: float  # diffuse horizontal
+
+
+class Orientation(NamedTuple):
+    """Panel orientation. Azimuth: 0 = north, 90 = east, 180 = south."""
+
+    tilt: float
+    azimuth: float
+
 
 @dataclass(frozen=True)
 class Sample:
@@ -46,31 +85,154 @@ class Sample:
 
     start: int          # epoch seconds, start of the hour
     energy_kwh: float   # real yield in that hour
-    irradiance: float   # Wh/m² in that hour (mean W/m² over the hour)
+    irradiance: Irradiance
 
 
 # ---------------------------------------------------------------------------
 # Open-Meteo parsing
 # ---------------------------------------------------------------------------
 
-def hours_from_open_meteo(times: Iterable[int], values: Iterable[float | None]) -> dict[int, float]:
-    """Map Open-Meteo hourly radiation to {hour start epoch: Wh/m²}.
+def hours_from_open_meteo(
+    times: Iterable[int],
+    ghi: Iterable[float | None],
+    dni: Iterable[float | None],
+    dhi: Iterable[float | None],
+) -> dict[int, Irradiance]:
+    """Map Open-Meteo hourly radiation to {hour start epoch: Irradiance}.
 
     Open-Meteo reports radiation as the mean of the PRECEDING hour: the value
     at 13:00 covers 12:00–13:00. Times must be unix timestamps
     (``timeformat=unixtime``), which keeps DST changes unambiguous.
     """
-    result: dict[int, float] = {}
-    for t, v in zip(times, values):
+    result: dict[int, Irradiance] = {}
+    for t, g, b, d in zip(times, ghi, dni, dhi):
         if t is None:
             continue
-        result[int(t) - 3600] = float(v or 0.0)
+        result[int(t) - 3600] = Irradiance(float(g or 0.0), float(b or 0.0), float(d or 0.0))
     return result
 
 
 def local_date(epoch: int, tz: tzinfo) -> date:
     """Local calendar date of an hour, judged by its start."""
     return datetime.fromtimestamp(epoch, tz).date()
+
+
+# ---------------------------------------------------------------------------
+# Irradiance on the panels
+# ---------------------------------------------------------------------------
+
+class _Sun(NamedTuple):
+    cos_zenith: float
+    sin_zenith: float
+    azimuth: float  # radians
+
+
+def _sun(epoch: int, latitude: float, longitude: float) -> _Sun | None:
+    """Sun at the middle of the hour, None when it is below the horizon."""
+    mid = datetime.fromtimestamp(epoch + 1800, timezone.utc)
+    azimuth, elevation = sun_position(mid, latitude, longitude)
+    if elevation <= 0:
+        return None
+    zenith = math.radians(90 - elevation)
+    return _Sun(math.cos(zenith), math.sin(zenith), math.radians(azimuth))
+
+
+def _plane(irr: Irradiance, sun: _Sun | None, orientation: Orientation | None) -> float:
+    """Irradiance on a plane (isotropic sky model), Wh/m²."""
+    if orientation is None:
+        return irr.ghi
+    if sun is None:
+        return 0.0
+    tilt = math.radians(orientation.tilt)
+    cos_tilt = math.cos(tilt)
+    cos_incidence = sun.cos_zenith * cos_tilt + sun.sin_zenith * math.sin(tilt) * math.cos(
+        sun.azimuth - math.radians(orientation.azimuth)
+    )
+    beam = irr.dni * max(0.0, cos_incidence)
+    sky = irr.dhi * (1 + cos_tilt) / 2
+    ground = irr.ghi * GROUND_ALBEDO * (1 - cos_tilt) / 2
+    return beam + sky + ground
+
+
+def plane_irradiance(
+    epoch: int,
+    irr: Irradiance,
+    latitude: float,
+    longitude: float,
+    orientation: Orientation | None,
+) -> float:
+    """Irradiance on the panels in one hour; horizontal without orientation."""
+    if orientation is None:
+        return irr.ghi
+    return _plane(irr, _sun(epoch, latitude, longitude), orientation)
+
+
+# ---------------------------------------------------------------------------
+# Orientation detection
+# ---------------------------------------------------------------------------
+
+def detect_orientation(
+    samples: Iterable[Sample],
+    latitude: float,
+    longitude: float,
+    now: datetime,
+    tz: tzinfo,
+    learn_from: date | None = None,
+) -> Orientation | None:
+    """Find the orientation whose daily shape fits the real yields best.
+
+    Each day's hours are compared as shares of the day, so only the shape
+    counts, not the size of the system. Uses the last DETECT_WINDOW_DAYS
+    days. Returns None (horizontal) without enough days, or when no
+    orientation fits clearly better than horizontal.
+    """
+    first = (now - timedelta(days=DETECT_WINDOW_DAYS)).timestamp()
+    by_day: dict[date, list[Sample]] = {}
+    for s in samples:
+        if s.start < first:
+            continue
+        d = local_date(s.start, tz)
+        if learn_from is not None and d < learn_from:
+            continue
+        by_day.setdefault(d, []).append(s)
+
+    days: list[tuple[float, list[tuple[float, Irradiance, _Sun | None]]]] = []
+    for hours in by_day.values():
+        total = sum(s.energy_kwh for s in hours)
+        if total < DETECT_MIN_DAY_KWH:
+            continue
+        days.append((total, [(s.energy_kwh, s.irradiance, _sun(s.start, latitude, longitude)) for s in hours]))
+    if len(days) < DETECT_MIN_DAYS:
+        return None
+
+    def error(orientation: Orientation | None) -> float:
+        err = weight = 0.0
+        for total, hours in days:
+            plane = [_plane(irr, sun, orientation) for _, irr, sun in hours]
+            plane_total = sum(plane)
+            if plane_total <= 0:
+                continue
+            for (energy, _, _), p in zip(hours, plane):
+                err += total * (energy / total - p / plane_total) ** 2
+            weight += total
+        return err / weight if weight else math.inf
+
+    best = (math.inf, Orientation(0, 180))
+    for tilt in DETECT_TILTS:
+        for azimuth in detect_azimuths(latitude):
+            candidate = Orientation(tilt, azimuth)
+            best = min(best, (error(candidate), candidate))
+    _, coarse = best
+    for tilt in range(max(0, int(coarse.tilt) - 4), min(90, int(coarse.tilt) + 5)):
+        for azimuth in range(int(coarse.azimuth) - 8, int(coarse.azimuth) + 9, 2):
+            candidate = Orientation(tilt, azimuth % 360)
+            best = min(best, (error(candidate), candidate))
+
+    best_error, orientation = best
+    flat_error = error(None)
+    if not best_error < flat_error * (1 - DETECT_MIN_GAIN):
+        return None
+    return orientation
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +259,7 @@ def learn_factors(
     now: datetime,
     tz: tzinfo,
     learn_from: date | None = None,
+    orientation: Orientation | None = None,
 ) -> dict[str, float]:
     """Learn a relative correction factor per sun-position bin.
 
@@ -116,14 +279,15 @@ def learn_factors(
     total_e = total_i = 0.0
     bins: dict[str, list[float]] = {}
     for s in samples:
-        if s.irradiance < MIN_SAMPLE_IRRADIANCE:
+        irradiance = plane_irradiance(s.start, s.irradiance, latitude, longitude, orientation)
+        if irradiance < MIN_SAMPLE_IRRADIANCE:
             continue
         key = sun_bin(s.start, latitude, longitude)
         if key is None:
             continue
         age_days = max(0.0, (now_epoch - s.start) / 86400)
         weight = 0.5 ** (age_days / HALF_LIFE_DAYS)
-        irr_kwh = s.irradiance / 1000 * weight
+        irr_kwh = irradiance / 1000 * weight
         energy = s.energy_kwh * weight
         total_e += energy
         total_i += irr_kwh
@@ -147,16 +311,17 @@ def learn_factors(
 # ---------------------------------------------------------------------------
 
 def hourly_forecast(
-    irradiance: dict[int, float],
+    irradiance: dict[int, Irradiance],
     daily_totals: dict[date, float],
     factors: dict[str, float],
     latitude: float,
     longitude: float,
     tz: tzinfo,
+    orientation: Orientation | None = None,
 ) -> list[tuple[int, float]]:
     """Spread each day's forecast total over its hours.
 
-    irradiance: {hour start epoch: Wh/m²}; daily_totals: {local date: kWh}.
+    irradiance: {hour start epoch: Irradiance}; daily_totals: {local date: kWh}.
     Returns a sorted list of (hour start epoch, kWh). Hours of days without a
     daily total are left out.
     """
@@ -166,7 +331,8 @@ def hourly_forecast(
         if d not in daily_totals:
             continue
         key = sun_bin(epoch, latitude, longitude)
-        weight = irr * factors.get(key, 1.0) if key is not None else 0.0
+        plane = plane_irradiance(epoch, irr, latitude, longitude, orientation)
+        weight = plane * factors.get(key, 1.0) if key is not None else 0.0
         shape.setdefault(d, {})[epoch] = max(0.0, weight)
 
     result: list[tuple[int, float]] = []

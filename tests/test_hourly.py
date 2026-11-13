@@ -11,6 +11,7 @@ import importlib.util
 import sys
 import types
 import unittest
+import math
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -55,10 +56,20 @@ def epoch(y, m, d, h, tz=timezone.utc, minute=0) -> int:
     return int(datetime(y, m, d, h, minute, tzinfo=tz).timestamp())
 
 
-def clear_sky_irradiance(start: int) -> float:
-    """Rough clear-sky Wh/m² of an hour from the sun elevation."""
+def clear_sky_irradiance(start: int):
+    """Rough clear-sky irradiance of an hour (Meinel beam, simple diffuse)."""
     _, elev = solar_position.sun_position(datetime.fromtimestamp(start + 1800, timezone.utc), LAT, LON)
-    return max(0.0, 900 * max(0.0, elev) / 60)
+    if elev <= 0:
+        return hourly.Irradiance(0.0, 0.0, 0.0)
+    cos_z = math.sin(math.radians(elev))
+    dni = 1000 * 0.7 ** ((1 / max(cos_z, 0.05)) ** 0.678)
+    dhi = 100 * cos_z
+    return hourly.Irradiance(dni * cos_z + dhi, dni, dhi)
+
+
+def one_value(times, values):
+    """Open-Meteo hours with the same value for global, direct and diffuse."""
+    return hourly.hours_from_open_meteo(times, values, values, values)
 
 
 class SunPositionTest(unittest.TestCase):
@@ -82,26 +93,46 @@ class SunPositionTest(unittest.TestCase):
 class OpenMeteoAlignmentTest(unittest.TestCase):
     def test_value_belongs_to_preceding_hour(self):
         # Open-Meteo: the value at 13:00 is the mean of 12:00-13:00
-        result = hourly.hours_from_open_meteo([epoch(2026, 11, 12, 13)], [500])
-        self.assertEqual(result, {epoch(2026, 11, 12, 12): 500.0})
+        result = hourly.hours_from_open_meteo([epoch(2026, 11, 12, 13)], [500], [600], [100])
+        self.assertEqual(result, {epoch(2026, 11, 12, 12): hourly.Irradiance(500.0, 600.0, 100.0)})
 
     def test_none_values_become_zero(self):
-        result = hourly.hours_from_open_meteo([epoch(2026, 11, 12, 1)], [None])
-        self.assertEqual(result, {epoch(2026, 11, 12, 0): 0.0})
+        result = one_value([epoch(2026, 11, 12, 1)], [None])
+        self.assertEqual(result, {epoch(2026, 11, 12, 0): hourly.Irradiance(0.0, 0.0, 0.0)})
 
     def test_recorder_hour_matches(self):
         # Recorder hour starting 12:00 UTC lines up with Open-Meteo's 13:00 value
         recorder_start = epoch(2026, 11, 12, 12)
-        om = hourly.hours_from_open_meteo([epoch(2026, 11, 12, 13)], [420])
+        om = one_value([epoch(2026, 11, 12, 13)], [420])
         self.assertIn(recorder_start, om)
 
-    def test_orientation_params(self):
-        self.assertEqual(weather_api.orientation_params(46, 150), {"tilt": 46.0, "azimuth": -30.0})
-        self.assertEqual(weather_api.orientation_params(30, 180)["azimuth"], 0.0)
-        self.assertEqual(weather_api.orientation_params(30, 90)["azimuth"], -90.0)
-        self.assertEqual(weather_api.orientation_params(30, 270)["azimuth"], 90.0)
-        self.assertEqual(weather_api.orientation_params(None, 180), {})
-        self.assertEqual(weather_api.orientation_params(30, None), {})
+
+class PlaneIrradianceTest(unittest.TestCase):
+    noon = epoch(2026, 11, 12, 12, BERLIN)
+    morning = epoch(2026, 11, 12, 9, BERLIN)
+
+    def _plane(self, start, orientation):
+        return hourly.plane_irradiance(start, clear_sky_irradiance(start), LAT, LON, orientation)
+
+    def test_horizontal_is_global(self):
+        irr = clear_sky_irradiance(self.noon)
+        self.assertEqual(self._plane(self.noon, None), irr.ghi)
+        # A flat plane in the sky model gives the same, whatever the azimuth
+        self.assertAlmostEqual(self._plane(self.noon, hourly.Orientation(0, 90)), irr.ghi, places=6)
+
+    def test_south_beats_north_in_winter(self):
+        flat = self._plane(self.noon, None)
+        self.assertGreater(self._plane(self.noon, hourly.Orientation(45, 180)), flat * 1.3)
+        self.assertLess(self._plane(self.noon, hourly.Orientation(45, 0)), flat)
+
+    def test_east_beats_west_in_the_morning(self):
+        east = self._plane(self.morning, hourly.Orientation(40, 90))
+        west = self._plane(self.morning, hourly.Orientation(40, 270))
+        self.assertGreater(east, west * 2)
+
+    def test_night_is_zero(self):
+        night = epoch(2026, 11, 12, 2, BERLIN)
+        self.assertEqual(self._plane(night, hourly.Orientation(30, 180)), 0.0)
 
 
 def _hourly_times(start_local: datetime, hours: int) -> list[int]:
@@ -115,7 +146,7 @@ class DstTest(unittest.TestCase):
         start = datetime(day.year, day.month, day.day, tzinfo=tz) - timedelta(days=1)
         times = _hourly_times(start, 24 * 3 + 2)
         values = [100.0] * len(times)
-        hours = hourly.hours_from_open_meteo(times, values)
+        hours = one_value(times, values)
         return sum(1 for e in hours if hourly.local_date(e, tz) == day)
 
     def test_spring_forward_has_23_hours(self):
@@ -131,7 +162,7 @@ class DstTest(unittest.TestCase):
         for day in (date(2026, 3, 29), date(2026, 10, 25)):
             start = datetime(day.year, day.month, day.day, tzinfo=BERLIN)
             times = _hourly_times(start, 30)
-            irr = {e: clear_sky_irradiance(e) for e in hourly.hours_from_open_meteo(times, [0] * 30)}
+            irr = {e: clear_sky_irradiance(e) for e in one_value(times, [0] * 30)}
             series = hourly.hourly_forecast(irr, {day: 10.0}, {}, LAT, LON, BERLIN)
             self.assertAlmostEqual(sum(k for _, k in series), 10.0, places=2)
             self.assertTrue(all(hourly.local_date(e, BERLIN) == day for e, _ in series))
@@ -144,7 +175,7 @@ class DstTest(unittest.TestCase):
         day = date(2026, 11, 12)
         start = datetime(2026, 11, 12, tzinfo=KOLKATA)
         times = _hourly_times(start, 24)
-        hours = hourly.hours_from_open_meteo(times, [1] * 24)
+        hours = one_value(times, [1] * 24)
         local = [hourly.local_date(e, KOLKATA) for e in hours]
         self.assertEqual(sum(1 for d in local if d == day), 23)  # first value covers the hour before midnight
         self.assertEqual(sum(1 for d in local if d == day - timedelta(days=1)), 1)
@@ -167,15 +198,26 @@ class ForecastResponseTest(unittest.TestCase):
                 "sunshine_duration": [3600, 7200, 0],
                 "daylight_duration": [36000, 36000, 36000],
             },
-            "hourly": {"time": [midnight[1] + 3600 * 12], "shortwave_radiation": [300]},
+            "hourly": {
+                "time": [midnight[1] + 3600 * 12],
+                "shortwave_radiation": [300],
+                "direct_normal_irradiance": [450],
+                "diffuse_radiation": [80],
+            },
         }
-        parsed = weather_api.parse_forecast_response(data, "shortwave_radiation")
+        parsed = weather_api.parse_forecast_response(data)
         self.assertEqual(parsed["yesterday"]["date"], "2026-10-24")
         self.assertEqual([d["date"] for d in parsed["forecast"]], ["2026-10-25", "2026-10-26"])
         self.assertEqual(parsed["forecast"][0]["sunrise"], "2026-10-25T07:30")
         self.assertEqual(parsed["forecast"][1]["sunset"], "2026-10-26T17:05")
         self.assertEqual(parsed["timezone"], "Europe/Berlin")
-        self.assertEqual(parsed["hourly"], {midnight[1] + 3600 * 11: 300.0})
+        self.assertEqual(parsed["hourly"], {midnight[1] + 3600 * 11: hourly.Irradiance(300.0, 450.0, 80.0)})
+
+    def test_request_has_no_orientation(self):
+        # Orientation is applied locally; Open-Meteo is asked for the components
+        self.assertEqual(
+            weather_api.HOURLY_FIELDS, "shortwave_radiation,direct_normal_irradiance,diffuse_radiation"
+        )
 
     def test_iso_daily_still_parsed(self):
         # Archive API keeps the ISO format
@@ -185,22 +227,78 @@ class ForecastResponseTest(unittest.TestCase):
         self.assertEqual(day["sunrise"], "2026-11-12T07:45")
 
 
-def _day_irradiance(day: date, tz=BERLIN) -> dict[int, float]:
+def _day_irradiance(day: date, tz=BERLIN) -> dict:
     start = int(datetime(day.year, day.month, day.day, tzinfo=tz).timestamp())
     return {start + i * 3600: clear_sky_irradiance(start + i * 3600) for i in range(24)}
 
 
+def _samples(days, orientation, yield_factor=4.5, shade_before_hour=None, shade_from_hour=None):
+    """Real yields of a system with the given orientation (and optional shade)."""
+    samples = []
+    for d in days:
+        for e, irr in _day_irradiance(d).items():
+            energy = hourly.plane_irradiance(e, irr, LAT, LON, orientation) / 1000 * yield_factor
+            hour = datetime.fromtimestamp(e, BERLIN).hour
+            if shade_before_hour is not None and hour < shade_before_hour:
+                energy *= 0.4
+            if shade_from_hour is not None and hour >= shade_from_hour:
+                energy *= 0.3
+            if irr.ghi > 0 or energy > 0:
+                samples.append(hourly.Sample(e, energy, irr))
+    return samples
+
+
+class DetectionTest(unittest.TestCase):
+    now = datetime(2026, 11, 13, tzinfo=timezone.utc)
+    days = [date(2026, 10, 20) + timedelta(days=i) for i in range(20)]
+
+    def _detect(self, samples, **kw):
+        return hourly.detect_orientation(samples, LAT, LON, self.now, BERLIN, **kw)
+
+    def test_finds_south_east_roof(self):
+        found = self._detect(_samples(self.days, hourly.Orientation(46, 150)))
+        self.assertIsNotNone(found)
+        self.assertAlmostEqual(found.tilt, 46, delta=6)
+        self.assertAlmostEqual(found.azimuth, 150, delta=10)
+
+    def test_finds_west_roof(self):
+        found = self._detect(_samples(self.days, hourly.Orientation(30, 240)))
+        self.assertAlmostEqual(found.azimuth, 240, delta=10)
+
+    def test_flat_system_stays_horizontal(self):
+        self.assertIsNone(self._detect(_samples(self.days, None)))
+
+    def test_too_few_days(self):
+        few = self.days[: hourly.DETECT_MIN_DAYS - 1]
+        self.assertIsNone(self._detect(_samples(few, hourly.Orientation(46, 150))))
+
+    def test_learn_from_and_window(self):
+        old = [date(2026, 8, 1) + timedelta(days=i) for i in range(20)]  # outside the window
+        samples = _samples(old, hourly.Orientation(30, 240)) + _samples(self.days, hourly.Orientation(46, 150))
+        found = self._detect(samples)
+        self.assertAlmostEqual(found.azimuth, 150, delta=10)
+        self.assertIsNone(self._detect(samples, learn_from=date(2026, 11, 20)))
+
+    def test_afternoon_shade_turns_it_east(self):
+        # Shade from 13:00 makes the system behave like an east-facing one:
+        # the detected orientation is an effective one, which the forecast needs
+        found = self._detect(_samples(self.days, hourly.Orientation(46, 150), shade_from_hour=13))
+        self.assertLess(found.azimuth, 140)
+
+    def test_detected_orientation_shapes_the_forecast(self):
+        day = date(2026, 11, 14)
+        flat = dict(hourly.hourly_forecast(_day_irradiance(day), {day: 10}, {}, LAT, LON, BERLIN))
+        west = dict(hourly.hourly_forecast(
+            _day_irradiance(day), {day: 10}, {}, LAT, LON, BERLIN, hourly.Orientation(40, 240)
+        ))
+        afternoon = epoch(2026, 11, 14, 14, BERLIN)
+        self.assertGreater(west[afternoon], flat[afternoon])
+        self.assertAlmostEqual(sum(west.values()), 10, places=2)
+
+
 class LearningTest(unittest.TestCase):
     def _samples(self, days: list[date], shade_before_hour: int | None = None, yield_factor=4.5):
-        samples = []
-        for d in days:
-            for e, irr in _day_irradiance(d).items():
-                energy = irr / 1000 * yield_factor
-                if shade_before_hour is not None and datetime.fromtimestamp(e, BERLIN).hour < shade_before_hour:
-                    energy *= 0.4
-                if irr > 0 or energy > 0:
-                    samples.append(hourly.Sample(e, energy, irr))
-        return samples
+        return _samples(days, None, yield_factor, shade_before_hour=shade_before_hour)
 
     def test_no_samples_no_factors(self):
         self.assertEqual(
@@ -252,7 +350,7 @@ class LearningTest(unittest.TestCase):
         old_shaded_bins = {
             hourly.sun_bin(s.start, LAT, LON)
             for s in self._samples(old)
-            if shaded(s.start) and s.irradiance >= hourly.MIN_SAMPLE_IRRADIANCE
+            if shaded(s.start) and s.irradiance.ghi >= hourly.MIN_SAMPLE_IRRADIANCE
         }
         east = [k for k in without_old if k in old_shaded_bins]
         self.assertTrue(east)
@@ -263,7 +361,7 @@ class LearningTest(unittest.TestCase):
     def test_outage_days_ignored(self):
         days = [date(2026, 10, 20) + timedelta(days=i) for i in range(10)]
         samples = self._samples(days)
-        outage = [hourly.Sample(e, 0.0, irr) for e, irr in _day_irradiance(date(2026, 11, 5)).items() if irr > 0]
+        outage = [hourly.Sample(e, 0.0, irr) for e, irr in _day_irradiance(date(2026, 11, 5)).items() if irr.ghi > 0]
         now = datetime(2026, 11, 13, tzinfo=timezone.utc)
         self.assertEqual(
             hourly.learn_factors(samples, LAT, LON, now, BERLIN),

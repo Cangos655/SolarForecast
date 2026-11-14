@@ -66,15 +66,14 @@ The entity IDs start with your location name, e.g. `sensor.home_solar_forecast_t
 | `…_solar_forecast_today` | kWh | Forecasted yield today |
 | `…_solar_forecast_tomorrow` | kWh | Forecasted yield tomorrow |
 | `…_solar_forecast_day_3` … `_day_8` | kWh | Days +2 to +7 |
-| `…_solar_forecast_model_accuracy` | % | How well-trained the model is (0–100%) |
+| `…_solar_forecast_model_accuracy` | % | Training completeness, not forecast error: real training days of 30, plus a bonus once sunny, mixed and overcast days are all known (see below) |
 | `…_solar_forecast_training_count` | — | Number of real training data points |
 | `…_solar_forecast_today_condition` | — | Weather bucket: sunny / mixed / overcast |
-
-| `…_solar_forecast_power_now` | W | Expected power right now |
-| `…_solar_forecast_energy_current_hour` | kWh | Expected energy in the current clock hour |
+| `…_solar_forecast_power_now` | W | Expected power right now. Attributes show the orientation in use (`orientation_source`, `tilt`, `azimuth`) |
+| `…_solar_forecast_energy_current_hour` | kWh | Expected energy in the current clock hour (newest forecast; frozen once the hour has begun) |
 | `…_solar_forecast_energy_next_hour` | kWh | Expected energy in the next clock hour |
 | `…_solar_forecast_current_hour_morning_forecast` | kWh | This hour's energy as forecast in the morning (from 06:00). Kept as a long-term statistic, to compare with your real yield |
-| `…_solar_forecast_remaining_today` | kWh | Expected energy from now until midnight |
+| `…_solar_forecast_remaining_today` | kWh | Expected energy from now until midnight. Equals today's forecast before sunrise, then falls during the day |
 | `…_solar_forecast_peak_time_today` / `_tomorrow` | time | Start of the strongest hour (attribute `energy_kwh`) |
 | `…_solar_forecast_best_2h_window` / `_best_3h_window` | time | Start of the best 2 or 3 hours still ahead today, else tomorrow – handy for the washing machine or dishwasher (attributes `end`, `energy_kwh`) |
 
@@ -142,7 +141,7 @@ Newer data is weighted 10× more than older data (linear weighting from 10 down 
 3. The learned shape spreads each day's forecast total over its hours.
 4. **Honest past:** the forecast is updated every hour, but an hour that has begun keeps the value it was forecast with before it began. The Energy Dashboard therefore shows how good the forecast really was, not a curve redrawn afterwards. The daily sensors always show the newest forecast for the whole day, so during the day they can differ from the sum of the hours.
 
-**Learn from date** (options): yields before this date are ignored – useful after shade was removed or the system was extended.
+**Learn from date** (options): yields before this date are ignored – useful after shade was removed or the system was extended. Daily training days before this date are removed for good, so *Model accuracy* drops until new days are learned.
 
 ## Data Sources
 

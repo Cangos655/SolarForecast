@@ -12,7 +12,7 @@ const CARD_VERSION = "1.1.1";
 
 const WEATHER_ICONS = {
   0: "☀️", 1: "🌤", 2: "⛅", 3: "☁️",
-  45: "🌫", 48: "🌫",
+  45: "☁️", 48: "☁️",
   51: "🌦", 53: "🌦", 55: "🌧",
   61: "🌧", 63: "🌧", 65: "🌧",
   71: "🌨", 73: "🌨", 75: "❄️",
@@ -40,7 +40,19 @@ const DAY_LABELS = [
   "Today", "Tomorrow", "Day 3", "Day 4", "Day 5", "Day 6", "Day 7", "Day 8"
 ];
 
-function getWeatherIcon(code) {
+// Dry days (WMO code 0-3): the daily code is the worst hour of the day, so a
+// single cloudy hour turns a sunny day into code 3. Use the radiation-based
+// condition instead; precipitation codes keep their own icon.
+const CONDITION_ICONS = {
+  sunny: "🌤️",
+  mixed: "⛅",
+  overcast: "☁️",
+};
+
+function getWeatherIcon(code, condition) {
+  if ((code === undefined || code === null || code <= 3) && CONDITION_ICONS[condition]) {
+    return CONDITION_ICONS[condition];
+  }
   if (code === undefined || code === null) return "🌤";
   for (const key of Object.keys(WEATHER_ICONS).map(Number).sort((a, b) => b - a)) {
     if (code >= key) return WEATHER_ICONS[key];
@@ -355,7 +367,7 @@ class SolarForecastCard extends HTMLElement {
     const forecastDaysHtml = forecasts.slice(1, 5).map((f) => `
       <div class="forecast-day">
         <div class="forecast-day-label">${shortWeekday(f.date)}</div>
-        <div class="forecast-day-icon">${getWeatherIcon(f.weather_code)}</div>
+        <div class="forecast-day-icon">${getWeatherIcon(f.weather_code, f.condition)}</div>
         <div class="forecast-day-kwh">${f.kwh.toFixed(1)}</div>
         ${f.temp_min != null || f.temp_max != null ? `<div class="forecast-day-temp">${f.temp_min ?? "—"}° / ${f.temp_max ?? "—"}°</div>` : ""}
       </div>
@@ -381,7 +393,7 @@ class SolarForecastCard extends HTMLElement {
                 ${conditionLabel}
               </span>
             </div>
-            <div class="weather-icon">${getWeatherIcon(today.weather_code)}</div>
+            <div class="weather-icon">${getWeatherIcon(today.weather_code, today.condition)}</div>
             <div class="today-details">
               ${today.temp_max != null || today.temp_min != null ? `🌡 ${today.temp_min ?? "—"}° / ${today.temp_max ?? "—"}°C` : ""}
             </div>

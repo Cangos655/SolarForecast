@@ -57,6 +57,17 @@ Updates still need a restart. If you used HACS before 2026.11, Home Assistant mi
 
 The sensor must be an energy sensor with state class `total` or `total_increasing`, because the yield is read from Home Assistant's long-term statistics. Lifetime totals work with either. Sensors that reset daily (e.g. "PV daily yield") work with `total_increasing`, or with `total` if the sensor also updates `last_reset`. Without `last_reset`, the statistics count the midnight reset as a drop and those days are wrong. After setup, the model trains automatically within the first update cycle.
 
+## Show the forecast in the Energy Dashboard
+
+The hourly forecast can be shown as the forecast curve in Home Assistant's Energy Dashboard:
+
+1. Go to **Settings → Dashboards → Energy**.
+2. Under *Solar panels*, click the pencil (edit) next to your solar production source.
+3. Under *Solar production forecast*, choose **Forecast production** and tick **Solar Forecast**.
+4. Click **Save**.
+
+Pick only one forecast there: if you select several, Home Assistant adds their curves up. The Energy Dashboard then shows the forecast as a line over your real production. Hours that have begun keep the value they were forecast with, so you can see how good the forecast really was.
+
 ## Sensors Created
 
 The entity IDs start with your location name, e.g. `sensor.home_solar_forecast_today` for a location called "Home". The table shows them without that prefix:
@@ -78,10 +89,6 @@ The entity IDs start with your location name, e.g. `sensor.home_solar_forecast_t
 | `…_solar_forecast_best_2h_window` / `_best_3h_window` | time | Start of the best 2 or 3 hours still ahead today, else tomorrow – handy for the washing machine or dishwasher (attributes `end`, `energy_kwh`) |
 
 Each forecast sensor includes attributes: `date`, `weather_code`, `radiation_mj_m2`, `temp_max_c`, `temp_min_c`, `condition`, `sunrise`, `sunset`, and `hourly` (list of `{start, kwh}` for that day; not stored in the database).
-
-### Energy Dashboard
-
-Go to **Settings → Dashboards → Energy**, edit your solar production source and select this Solar Forecast entry under *Solar production forecast*. Pick only one forecast there: if you select several, Home Assistant adds their curves up.
 
 ## The Lovelace Card
 
